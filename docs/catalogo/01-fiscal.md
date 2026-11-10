@@ -1,20 +1,21 @@
 # Catálogo de funcionalidades fiscais do ERP legado (módulo fiscal)
 
-Fonte: 15 arquivos PHP de `legado-fiscal/` (App_pes/), `schema_erp_raicom.sql` (217 tabelas) e `CONTEXTO_PROJETO.md`.
+Fonte: 15 arquivos PHP de `legado-fiscal/`, mais (2ª rodada) 8 arquivos de `App_pes/`, `funcoes.php` e 2 amostras reais de lote; `schema_erp_raicom.sql` (217 tabelas) e `CONTEXTO_PROJETO.md`.
 Análise somente leitura; nenhum PHP foi executado.
 
 ## Convenções deste documento
 
-- **[obs]** = observado diretamente no código ou no schema (com arquivo e linha aproximada).
+- **[obs]** = observado diretamente no código, no schema ou nas amostras de lote (com arquivo e linha aproximada).
 - **[inf]** = inferido por dedução; precisa de confirmação.
-- **[nf]** = depende de arquivo que **não foi fornecido** (não é possível descrever o comportamento).
+- **[nf]** = depende de arquivo que **ainda não foi fornecido**.
+- Revisão 2: incorporados `ControlNotaFiscalServico.php`, `NotaFiscalServico.php`, `CnsSCM.php`, `CnsSVA.php`, `CnsNotaDebito.php`, `formSVA.php`, `formNotaDebito.php`, `LogEnvio.php`, `funcoes.php` e duas amostras reais de lote (`loteNFSE/RPS008351A008351.txt` e `RPS008352A008352.txt`). Das amostras só são descritos formato e posições; nenhum dado pessoal foi copiado.
 - Números de linha são aproximados e referem-se ao arquivo convertido para UTF-8.
-- Os arquivos fornecidos estão em UTF-8 (alguns ASCII), embora as páginas declarem `charset=iso-8859-1` e o banco seja latin1. O legado mistura `utf8_decode()` em alguns pontos e não em outros (risco de caracteres corrompidos na migração).
+- Os arquivos PHP estão em UTF-8 (alguns ASCII), embora as páginas declarem `charset=iso-8859-1` e o banco seja latin1; as amostras de lote estão em ISO-8859-1. O legado mistura `utf8_decode()` em alguns pontos e não em outros (risco de caracteres corrompidos na migração).
+- O legado usa a extensão `mysql_*` do PHP 5 (`funcoes.php`, função `executar`), removida do PHP 7+.
 
-### Arquivos citados no código mas NÃO fornecidos [nf]
+### Arquivos citados no código que ainda NÃO foram fornecidos [nf]
 
-`ControlNotaFiscalServico.php` (ações `exportar` e `importar` da NFS-e), `NotaFiscalServico.php` (tela que monta `$_SESSION['where_nfse']`), `CnsSCM.php`, `CnsSVA.php`, `CnsNotaDebito.php` (listagens/consultas), `formSVA.php`, `formNotaDebito.php`, `LogEnvio.php` (`keysLogEnvio`, `insertLogEnvio`), `funcoes.php` (`executar`, `convertDateToBr/Bd`, `toDataSQL`, `mascara`, `mesExtenso`, `redireciona`, `a`, `charComplete`, `verificaSituacao`, `decryptIt`), `conexao.php`, `config.php`, `toolbarFinanc.php`, a biblioteca FPDF, e a pasta `loteNFSE/`.
-Consequência: **a geração do arquivo de lote (que junta cabeçalho + detalhes + rodapé), a gravação do arquivo em disco, o parser do retorno da NFS-e e a origem dos registros de `nota_fiscal_servico` não puderam ser lidos.** Só as funções auxiliares (`FuncoesNFSE.php`) estão disponíveis.
+`ImpressaoSVA.php` e `ImpressaoNotaDebito.php` (botões "Imprimir" e "Exportar Lote" de SVA/ND; os PDFs gravados na emissão, `PDF_SVA.php` e `PDF_Nota_Debito.php`, já foram lidos), `obj_js/NotaFiscalServico.js` (script da consulta de NFS-e: janela de edição e confirmação de cancelamento), `config.php` e `conexao.php` (variáveis `$path`, `$path_nfse`, `$caminho`), `toolbarFinanc.php`, `topo.php`, `base.php`, a biblioteca FPDF, `evm_mailer.php`, a tela de filtros que dispara a ação `gerarnotafiscal` (geração de RPS) e a tela que dispara a ação `consulta` de NFS-e. `CnsNotaFiscalServico.php`, alvo de vários redirects de `ControlNotaFiscalServico.php`, não existe entre os arquivos recebidos (a listagem real é `NotaFiscalServico.php`) [inf: redirecionamento quebrado].
 
 ---
 
@@ -29,7 +30,7 @@ SCM, SVA e Nota de Débito nascem da mesma origem: **parcelas do contas a recebe
 | SCM (Mod. 21) | 323 e 175 (175 = 20% do valor) | `gerado_scm`='S', `nr_scm` | `nr_ultima_scm` |
 | SVA (fatura) | 324, 175 (80% do valor) e 467 | `gerado_svascm`='S', `nr_svascm` | `nr_ultima_sva` |
 | Nota de Débito | 174, 467 e 430 | `gerado_svascm`='S', `nr_svascm` (mesma coluna do SVA) | `nr_ultima_nd` |
-| NFS-e (RPS) | não vem de `payment_detalhe` nos arquivos fornecidos [nf] | `nota_fiscal_servico.emitiu_nf` | `nr_ultima_rps`, `nr_ultima_nfse` (uso não visto) |
+| NFS-e (RPS) | 188 e 171 (`ControlNotaFiscalServico.php`, ação `gerarnotafiscal`) | `gerado_svascm`='S' (**mesma coluna do SVA e da ND**) | `nr_ultima_rps` (empresa 4 fixa no código) |
 
 Os significados dos itens 323/324/175/467/174/430 **não constam do schema** (sem dados); ver seção 5.
 
@@ -37,23 +38,30 @@ Os significados dos itens 323/324/175/467/174/430 **não constam do schema** (se
 
 1. **Consulta de clientes/parcelas a faturar** (botão "Consulta Clientes" nas telas `SCM.php`, `SVA.php`, `NotaDebito.php`): filtros por contrato, cliente, período de emissão, período de vencimento (e, no SCM/SVA, situação do pagamento "Em Aberto"/"Pago" e unidade de negócio). A tela faz POST via AJAX (`action=gerar`) para o `Control*.php`, que devolve uma tabela HTML com checkbox por parcela.
 2. **Seleção e geração** ("Gerar SCM/SVA/Nota Débito"): o usuário marca as parcelas (individual ou "marcar todos"), informa a data de emissão (padrão = hoje) e envia (`action=atualiza`). Em **uma transação** (`BEGIN`/`COMMIT`/`ROLLBACK`), para cada linha selecionada: calcula o próximo número, grava o registro (`scm`/`sva`/`nota_debito`), gera um PDF em disco (`PDF_Scm/`, `PDF_Sva/`, `PDF_Nota_Debito/`), insere linha em `log_envio` (controle do e-mail de cobrança), marca a parcela como faturada e avança o contador em `info_fiscal_empresa`.
-3. **Consulta/edição posterior**: "Consulta SCM/SVA/Nota de Débito" grava um `WHERE` em sessão (`where_scm`, `where_sva`, `asEDs`) e redireciona para `Cns*.php` [nf]. A edição individual permite alterar vencimento, valor e descrição; cancelar e reativar. A impressão do SCM é feita por `ImpressaoSCM.php`.
+3. **Consulta/edição posterior**: "Consulta SCM/SVA/Nota de Débito" grava um `WHERE` em sessão (`where_scm`, `where_sva`, `asEDs`) e redireciona para `Cns*.php`. A edição individual permite alterar vencimento, valor e descrição; cancelar e reativar. A impressão do SCM é feita por `ImpressaoSCM.php`.
 
 Não há, nesses três fluxos, **nenhuma transmissão a SEFAZ ou prefeitura** nos arquivos fornecidos. O "documento fiscal" é o PDF gerado localmente (e, no SCM, um código de autenticação MD5 próprio e funções para arquivos do Convênio ICMS 115/03 que não estão ligadas a nenhuma tela fornecida).
 
-### 1.3 NFS-e São Paulo (RPS em lote TXT, layout 1) [obs + nf]
+### 1.3 NFS-e São Paulo (RPS em lote TXT, layout 1) [obs]
 
 ```
-nota_fiscal_servico (RPS cadastrados em tela não fornecida; situacao 'A')
-   -> ExportarNFSE.php: lista RPS (WHERE vindo da sessão + situacao='A'), usuário marca e clica "Gerar Lote"
-   -> POST para ControlNotaFiscalServico.php (action=exportar)  [nf]
-        usa FuncoesNFSE: headerRpsLote() + detalheRpsLote() por RPS + footerRpsLote()
-        detalheRpsLote() marca nota_fiscal_servico.emitiu_nf='S'
-   -> arquivo TXT em loteNFSE/ -> upload MANUAL no portal da Nota Fiscal Paulistana
-   -> ImportarNFSE.php: usuário envia o arquivo de retorno -> ControlNotaFiscalServico.php (action=importar) [nf]
+payment_detalhe (itens de plano de contas 188 e 171, gerado_svascm='N')
+   -> ação gerarnotafiscal: lista parcelas por período de vencimento (tela de filtros [nf])
+   -> ação gera-nfse: cria 1 registro em nota_fiscal_servico por parcela selecionada
+        (RPS = nr_ultima_rps + 1...; impostos calculados; situacao='A', emitiu_nf='N'),
+        grava log_envio, marca a parcela (gerado_svascm='S') e avança nr_ultima_rps  [empresa 4 fixa]
+   -> NotaFiscalServico.php: consulta (10 por página), edição e cancelamento de RPS
+   -> ExportarNFSE.php: lista RPS (WHERE da consulta + situacao='A'), usuário marca e clica "Gerar Lote"
+   -> ControlNotaFiscalServico.php (action=exportar): monta o TXT (cabeçalho + detalhes + rodapé),
+        grava em $path_nfse e devolve como download; cada RPS fica emitiu_nf='S', situacao ainda 'A'
+   -> upload MANUAL do TXT no portal da Nota Fiscal Paulistana
+   -> portal devolve arquivo de retorno CSV (separador ';')
+   -> ImportarNFSE.php -> ControlNotaFiscalServico.php (action=importar): casa por nº do RPS + valor
+        e grava nr_nfse, nr_verificacao_nfse e situacao='E' (Emitida)
+   -> NotaFiscalServico.php: link para a NFS-e no portal (url_nfse + ccm + nf + cod de verificação)
 ```
 
-O contexto do projeto informa que, há 2 a 3 anos, a emissão é feita manualmente fora do ERP e que os últimos arquivos em `loteNFSE/` são de ago/2023 [CONTEXTO_PROJETO.md].
+O contexto do projeto informa que, há 2 a 3 anos, a emissão é feita manualmente fora do ERP e que os últimos arquivos em `loteNFSE/` são de ago/2023 [CONTEXTO_PROJETO.md]. As duas amostras recebidas confirmam o formato (ver seção 3.1).
 
 ---
 
@@ -65,72 +73,123 @@ Legenda do tipo: **NFS-e** = NFS-e São Paulo; **Mod.21** = nota fiscal de servi
 
 #### FIS-001 Listagem e seleção de RPS para exportação
 - **Tipo:** NFS-e
-- **Origem:** `ExportarNFSE.php` (linhas 19-25 consulta; 103-133 grade; 155-222 JS). Chama `consultaNFSE()` de `FuncoesNFSE.php`. A tela anterior `NotaFiscalServico.php` (que define `$_SESSION['where_nfse']`) não foi fornecida [nf].
-- **O que o usuário faz:** chega da tela de consulta de NFS-e com um filtro já aplicado (guardado em sessão), vê a grade com checkbox por RPS e "marcar todos"; o botão "Gerar Lote" fica desabilitado até haver pelo menos um item marcado; "Voltar" retorna a `NotaFiscalServico.php`. Colunas: RPS, Cliente, Valor (R$), ISS, PCC, Emissão, Vencimento.
+- **Origem:** `ExportarNFSE.php` (linhas 19-25 consulta; 103-133 grade; 155-222 JS). Chama `consultaNFSE()` de `FuncoesNFSE.php`. O filtro vem de `$_SESSION['where_nfse']`, gravado por `NotaFiscalServico.php` (linhas 38-92) e por `ControlNotaFiscalServico.php` (`action=consulta`, linhas 12-61).
+- **O que o usuário faz:** na consulta de NFS-e clica "Exportar RPS"; vê a grade com checkbox por RPS e "marcar todos"; o botão "Gerar Lote" fica desabilitado até haver pelo menos um item marcado; "Voltar" retorna a `NotaFiscalServico.php`. Colunas: RPS, Cliente, Valor (R$), ISS, PCC, Emissão, Vencimento.
 - **Regra de negócio [obs]:**
-  - `SELECT * FROM nota_fiscal_servico` + `$_SESSION['where_nfse']`; se o filtro não for vazio, acrescenta ` AND situacao = 'A'`. **Se o filtro for vazio, o `WHERE` nem é criado** e a consulta lista todos os registros (inclusive não-ativos), pois a cláusula de situação só é anexada quando já existe filtro.
-  - PCC exibido = `round(valor_cofins + valor_pis + valor_csll, 2)`.
-  - Nome do cliente buscado por RPS (`payment_fornecedor.Empresa`, N+1 consultas).
-  - O campo oculto `empresa` do formulário usa `$nf['nr_empresa']` do **último** RPS iterado (se a lista misturar empresas, o cabeçalho do lote usará a empresa do último).
-  - O botão "Voltar" usa `$_SERVER['where_nfse']` (provável erro; deveria ser `$_SESSION`), então não repassa o filtro [inf].
-- **Tabelas/colunas:** lê `nota_fiscal_servico` (`id, nr_rps, nr_pessoa, valor_total, valor_iss, valor_pis, valor_cofins, valor_csll, dt_emissao, dt_vencimento, situacao, nr_empresa`) e `payment_fornecedor.Empresa` (`nr_pessoa` = `nr_payment_fornecedor`). `verificaSituacao()` não fornecida.
-- **Equivalente no ERP novo:** fila/lista de "documentos a emitir" por empresa com filtros e seleção em lote, mas sem arquivo TXT: o lote seleciona os RPS e dispara o envio ao Web Service (síncrono ou assíncrono), com status por documento (pendente, enviado, autorizado, rejeitado, cancelado). Filtro de situação sempre aplicado no servidor.
+  - `SELECT * FROM nota_fiscal_servico` + `$_SESSION['where_nfse']` + ` AND situacao = 'A'` (situação "Aberta"; RPS já importadas como 'E' ou canceladas 'C' não aparecem).
+  - `NotaFiscalServico.php` executa `unset($_SESSION['where_nfse'])` e sempre reconstrói o filtro (empresa da sessão, com 1 e 4 tratadas como grupo `IN(1,4,0)`, mais filtros do POST). Logo o `WHERE` nunca chega vazio ao Exportar; **a hipótese anterior de "lista sem filtro" não se confirma**.
+  - **Precedência de `OR`:** o filtro por número usa `AND nr_rps = X OR nr_nfse = X` sem parênteses; o `OR` divide a condição em dois ramos e o ramo `nr_nfse = X` fica sem o filtro de empresa (e, no Exportar, sem o de situação) [obs].
+  - PCC exibido = `round(valor_cofins + valor_pis + valor_csll, 2)`. Nome do cliente buscado por RPS (N+1 consultas) em `payment_fornecedor.Empresa` usando `nr_pessoa`.
+  - O campo oculto `empresa` usa `$nf['nr_empresa']` do último RPS iterado, mas o Control **ignora** esse campo (empresa 4 fixa; ver FIS-002).
+  - O botão "Voltar" usa `$_SERVER['where_nfse']` (provável erro; deveria ser `$_SESSION`).
+- **Tabelas/colunas:** lê `nota_fiscal_servico` (`id, nr_rps, nr_pessoa, valor_total, valor_iss, valor_pis, valor_cofins, valor_csll, dt_emissao, dt_vencimento, situacao, nr_empresa`) e `payment_fornecedor.Empresa`. `verificaSituacao()` (`funcoes.php`): 'C' = Cancelada, 'A' = Aberta, 'E' = Emitida.
+- **Equivalente no ERP novo:** fila/lista de "documentos a emitir" por empresa com filtros e seleção em lote, mas sem arquivo TXT: o lote seleciona os RPS e dispara o envio ao Web Service (síncrono ou assíncrono), com status por documento (pendente, enviado, autorizado, rejeitado, cancelado). Filtros sempre aplicados no servidor, com parâmetros.
 
 #### FIS-002 Geração do lote de RPS em TXT (layout 1)
 - **Tipo:** NFS-e
-- **Origem:** `FuncoesNFSE.php`: `detalheRpsLote()` (l. 14-91), `headerRpsLote()` (l. 93-106), `validaHeader()`, `footerRpsLote()` (l. 119-126), `validaFooter()`. Acionadas por `ControlNotaFiscalServico.php`, `action=exportar`, `type=notafiscalservico`, `chckRps[]`, `empresa` (arquivo não fornecido [nf]). Layout completo na seção 3.1.
-- **O que o usuário faz:** seleciona RPS e clica "Gerar Lote"; o modal de sucesso tem botões "Baixar o arquivo!" e "Sair" (na tela, a ação de download está vazia).
+- **Origem:** `ControlNotaFiscalServico.php`, `action=exportar`, `type=notafiscalservico`, `chckRps[]` (linhas 289-358); `FuncoesNFSE.php`: `detalheRpsLote()` (l. 14-91), `headerRpsLote()` (l. 93-106), `validaHeader()`, `footerRpsLote()` (l. 119-126), `validaFooter()`. Layout na seção 3.1, conferido contra as amostras.
+- **O que o usuário faz:** seleciona RPS e clica "Gerar Lote"; o navegador recebe diretamente o arquivo `.txt` como download (o formulário posta para o Control e a resposta é o arquivo; ver FIS-005).
 - **Regra de negócio [obs]:**
-  - Registro tipo `1` (cabeçalho), tipo `6` (um por RPS), tipo `9` (rodapé).
-  - Cabeçalho = 28 caracteres validados; se diferente, grava o texto `header invalido`. Rodapé = 38 caracteres; senão `footer invalido`. Ou seja, a falha vai **para dentro do arquivo**, sem exceção.
-  - Cabeçalho usa `empresa.nr_inscriMun` (8 posições, zeros à esquerda) e `date("Ymd")` duas vezes (início e fim do período = hoje). Os campos de primeiro/último RPS estão comentados.
-  - **Data de emissão do RPS no arquivo = data de hoje** (`date("Ymd")`), e não `nota_fiscal_servico.dt_emissao`.
+  - **Empresa fixa 4:** `$empresa = 4` no código; o campo POST `empresa` é ignorado. O cabeçalho usa sempre a inscrição municipal da empresa 4 e a versão `002` (fixa em `$infoH['versao']`).
+  - Para cada id (na ordem de seleção) lê o RPS, gera a linha e acumula `servico`. O total de deduções acumula `$infoDetalhe['Deducao']`, chave que a função não devolve (devolve `deducao`): **o rodapé sempre sai com total de deduções zero**, o que as amostras confirmam. `primeira`/`ultima` são calculadas e não entram no cabeçalho.
+  - **Nome do arquivo:** `RPS` + `nr_rps` do primeiro id selecionado (6 dígitos) + `A` + `nr_rps` do último id selecionado (6 dígitos) + `.txt` (primeiro e último pela ordem de seleção, não pelo menor e maior). Gravado em `$path_nfse` (config não fornecido) com `chmod 0777` e enviado com `Content-Disposition: attachment`.
+  - Registro tipo `1` (cabeçalho), tipo `6` (um por RPS), tipo `9` (rodapé), cada um terminado em `PHP_EOL` (LF nas amostras). Se o cabeçalho não tiver 28 caracteres grava o texto `header invalido`; se o rodapé não tiver 38, `footer invalido`: a falha vai **para dentro do arquivo**, sem exceção.
+  - Cabeçalho: `empresa.nr_inscriMun` (8 posições) e `date("Ymd")` duas vezes (início e fim do período = hoje).
+  - **Data de emissão do RPS no arquivo = data de geração** (`date("Ymd")`), e não `nota_fiscal_servico.dt_emissao`; nas amostras é igual às datas do cabeçalho.
   - Série do RPS fixa `00000`; tipo `RPS`.
-  - Valores monetários sem separador (centavos), zeros à esquerda (15 posições). Depende de o driver devolver `decimal` com 2 casas ("1234.56" vira `123456`) [inf].
-  - Código de serviço = `empresa.cod_servico` (um único por empresa, 5 posições), **não** `nota_fiscal_servico.cod_servico`.
-  - **Alíquota: o código lê `$rps[0]['ali_iss']`, mas a coluna do schema é `aliq_iss`** (também `info_fiscal_empresa.aliq_iss`). Com o nome errado, o campo resulta em `0000` em todos os RPS [inf; confirmar no arquivo real em `loteNFSE/`].
-  - ISS retido: `iss_retido = 'N'` => `2`; qualquer outro valor => `1`.
-  - Tomador: `TipoPessoa = 'F'` => indicador `1` (CPF, 11 dígitos); qualquer outro valor => `2` (CNPJ, 14 dígitos). **O CPF ocupa 11 posições, não 14, o que desloca todo o restante da linha em 3 colunas.**
-  - IE do tomador: `ISENTO` (após `trim`/`upper`) vira `0`; senão remove pontuação e completa com zeros (12). IM do tomador sempre `00000000`.
-  - Razão social cortada em 75; e-mail sem quebras de linha e cortado em 75 (o campo de e-mail do cliente pode ter vários endereços; vai o texto cortado, incluindo `;`).
-  - Endereço: tipo de logradouro = 3 primeiras letras (`r.`, `r,`, `r:`, `r ` => `RUA`); depois `substr(trim(Endereco), 2 ou 3, 49)` e `clear()` (remove `/ - . : espaço , < > ;`). **A remoção de espaços une as palavras e o início do corte (posição 2 para RUA) deixa uma letra a mais do tipo** (ex.: "Rua das Flores, 123" => `ADASFLORES123`) [inf pela leitura do código]. Número e complemento não têm campo próprio; seguem embutidos no texto do logradouro.
-  - `formtText` e `formtInt` usam `str_pad`, que **não trunca**: bairro (30), cidade (50), UF (2) e razão do logradouro não são cortados explicitamente, então valores longos deslocam as colunas seguintes [obs].
-  - Tributos: envia PIS, COFINS e CSLL (`valor_*`); INSS e IR vão zerados mesmo existindo `valor_inss`, `valor_ir` no schema [obs].
-  - Discriminação (final da linha, tamanho variável) = `desc_servico` sem quebras + ` VENCIMENTO: dd/mm/aaaa` (`dt_vencimento`), sem acentos (`tirarAcentos`).
-  - Cada linha de detalhe é **uma consulta + um UPDATE**: `UPDATE nota_fiscal_servico SET emitiu_nf='S' WHERE id=...`. Se o UPDATE falha, o "detalhe" passa a ser a mensagem `Não foi possivel atualizar a RPS do id: ...` (texto de erro entra no retorno no lugar da linha).
-  - `extraiLogradouro()` existe mas não é usada nos arquivos fornecidos.
+  - Valores monetários sem separador (centavos), zeros à esquerda (15 posições).
+  - Código de serviço = `empresa.cod_servico` (um por empresa, 5 posições; nas amostras `07498`), **não** `nota_fiscal_servico.cod_servico` (que é gravado, mas não lido aqui).
+  - **Alíquota: o código lê `$rps[0]['ali_iss']`; a coluna do schema é `aliq_iss`**. Resultado nas duas amostras: `0000`. Bug confirmado.
+  - ISS retido: `iss_retido = 'N'` => `2`; qualquer outro valor => `1`. As amostras trazem `2`.
+  - Tomador: `TipoPessoa = 'F'` => indicador `1` (CPF, 11 dígitos); qualquer outro valor => `2` (CNPJ, 14 dígitos). **O CPF ocupa 11 posições, não 14, o que desloca o restante da linha em 3 colunas** (as duas amostras são CNPJ; o caso CPF não aparece, é leitura do código).
+  - IE do tomador: `ISENTO` (após `trim`/`upper`) vira `0`; senão remove pontuação e completa com zeros (12). IM do tomador sempre `00000000` (confirmado).
+  - Razão social cortada em 75, **sem passar para maiúsculas** (as amostras preservam a caixa original); cidade e razão preservam acentos (bytes ISO-8859-1 nas amostras).
+  - E-mail do cliente (`EMail` pode ter vários endereços separados por `;`): sem quebras de linha e cortado em 75 caracteres, **inclusive no meio de um endereço** (confirmado nas amostras: o campo vai cheio, com três `@`, e termina cortado).
+  - Endereço: tipo de logradouro = 3 primeiras letras (`r.`, `r,`, `r:`, `r ` => `RUA`); depois `substr(trim(Endereco), 2 ou 3, 49)` e `clear()` (remove `/ - . : espaço , < > ;`), em maiúsculas. **Confirmado nas amostras:** o campo de logradouro não tem nenhum espaço nem pontuação (palavras coladas, número colado ao nome). Número e complemento não têm campo próprio.
+  - `formtText` e `formtInt` usam `str_pad`, que **não trunca**: bairro (30), cidade (50), UF (2) não são cortados explicitamente; valores longos deslocam as colunas seguintes.
+  - Tributos: envia PIS, COFINS e CSLL; INSS e IR vão zerados mesmo existindo `valor_inss`/`valor_ir` no RPS. As amostras mostram PIS = 0,65%, COFINS = 3% e CSLL = 1% do valor do serviço, coerente com o cálculo de FIS-008.
+  - Discriminação (final da linha, tamanho variável) = `desc_servico` sem quebras + ` VENCIMENTO: dd/mm/aaaa`. A função `tirarAcentos` **não tem efeito**: as amostras ainda contêm `Ç` e `Ã` (bytes ISO-8859-1) na discriminação, porque o padrão do `preg_replace` está em UTF-8 e os dados vêm em latin1 [inf]. A discriminação nas amostras começa com um espaço e contém a marcação de parcela `[n/m]`.
+  - Cada linha de detalhe faz uma consulta e um UPDATE de `emitiu_nf='S'` (FIS-004). Se o UPDATE falha, o "detalhe" passa a ser a mensagem `Não foi possivel atualizar a RPS do id: ...` (texto de erro entra no arquivo no lugar da linha).
+  - `extraiLogradouro()` e `download()` existem mas não são chamadas.
 - **Tabelas/colunas:** lê `nota_fiscal_servico` (`nr_rps, valor_servico, valor_deducao, iss_retido, valor_pis, valor_cofins, valor_csll, desc_servico, dt_vencimento, nr_pessoa, nr_empresa, id`), `empresa` (`cod_mun_ibge, cod_servico, nr_inscriMun`), `payment_fornecedor` (`EMail, TipoPessoa, Empresa, INSCRG, CGCCPF, Endereco, Bairro, Cidade, Estado, CEP`). Grava `nota_fiscal_servico.emitiu_nf`.
-- **Equivalente no ERP novo:** substituído por montagem do XML de RPS/NFS-e **layout 2** (ISS + grupo IBSCBS) assinado com certificado A1 e envio ao Web Service (`nfews.prefeitura.sp.gov.br`, manual v3.4 ou mais novo, a revalidar). Código de serviço, alíquota, retenções e indicadores IBS/CBS (CST/cClassTrib) vêm de parametrização com vigência por empresa/serviço, nunca de colunas soltas. Endereço estruturado (logradouro, número, complemento, bairro, código IBGE do município) em vez de texto cortado. Data de emissão = a do documento. Falhas de validação geram erro visível e log, nunca texto dentro do payload.
+- **Equivalente no ERP novo:** substituído por montagem do XML de RPS/NFS-e **layout 2** (ISS + grupo IBSCBS) assinado com certificado A1 e envio ao Web Service (`nfews.prefeitura.sp.gov.br`, manual v3.4 ou mais novo, a revalidar). Código de serviço, alíquota, retenções e indicadores IBS/CBS (CST/cClassTrib) vêm de parametrização com vigência por empresa/serviço, nunca de colunas soltas. Endereço estruturado (logradouro, número, complemento, bairro, código IBGE do município) em vez de texto cortado. Data de emissão = a do documento. Empresa emissora escolhida pelo documento (não fixa). Falhas de validação geram erro visível e log, nunca texto dentro do payload.
 
 #### FIS-003 Tributação T/F pelo município (IBGE 3550308) e ISS retido
 - **Tipo:** NFS-e
 - **Origem:** `FuncoesNFSE.php`, `detalheRpsLote()` l. 15-17 e l. 45.
 - **O que o usuário faz:** nada na tela; regra aplicada na geração do lote.
-- **Regra de negócio [obs]:** `$situacao_rps = empresa.cod_mun_ibge == '3550308' ? 'T' : 'F'` (T = tributado no município de São Paulo; F = fora [inf pelo CONTEXTO_PROJETO.md]). **A variável é calculada, mas o arquivo recebe a letra `T` fixa** (`$detalhe .= "T";` na l. 45). Ou seja, a regra T/F **não tem efeito** no layout; todo RPS sai como `T`. A base do cálculo é o município da **empresa prestadora**, não o do tomador.
+- **Regra de negócio [obs]:** `$situacao_rps = empresa.cod_mun_ibge == '3550308' ? 'T' : 'F'` (T = tributado em São Paulo; F = fora [inf, pelo CONTEXTO_PROJETO.md]). **A variável é calculada, mas o arquivo recebe a letra `T` fixa** (`$detalhe .= "T";`, l. 45). **Confirmado nas duas amostras:** posição 32 = `T`. A regra T/F não tem efeito; todo RPS sai como `T`. A base do cálculo seria o município da **empresa prestadora**, não o do tomador. O rótulo do campo na posição 32 (situação do RPS ou tributação) não é dado pelo código; nesta documentação é tratado como "tributação" por [inf].
 - **Tabelas/colunas:** lê `empresa.cod_mun_ibge`.
 - **Equivalente no ERP novo:** o local de incidência/tributação passa a ser decisão fiscal explícita por serviço (prestador x tomador x município da prestação), parametrizável e validada com o contador; o XML layout 2 traz os campos próprios. Não replicar o `T` fixo.
 
 #### FIS-004 Marcação de RPS emitida
 - **Tipo:** NFS-e
-- **Origem:** `FuncoesNFSE.php` l. 82 (`UPDATE ... SET emitiu_nf = 'S'`).
-- **Regra [obs]:** o RPS é marcado como emitido **no momento em que a linha é gerada**, antes de qualquer confirmação da prefeitura. Não há reversão se o usuário não enviar o arquivo; também não há bloqueio visível para reexportar (a filtragem por `emitiu_nf` não aparece em `ExportarNFSE.php`).
+- **Origem:** `FuncoesNFSE.php` l. 82 (`UPDATE ... SET emitiu_nf = 'S'`); consumo em `ControlNotaFiscalServico.php` (importação, l. 389).
+- **Regra [obs]:** o RPS é marcado `emitiu_nf='S'` **no momento em que a linha é gerada**, antes de qualquer confirmação da prefeitura. Essa marca é pré-requisito da importação do retorno (a busca exige `emitiu_nf = 'S'`). Não há reversão se o usuário não enviar o arquivo, e nada impede reexportar o mesmo RPS (a lista de exportação filtra por `situacao='A'`, não por `emitiu_nf`). A situação do RPS só muda para 'E' na importação.
 - **Tabelas:** grava `nota_fiscal_servico.emitiu_nf`.
 - **Equivalente no ERP novo:** estados do documento controlados pelo retorno do Web Service (rascunho, na fila, enviado, autorizado, rejeitado, cancelado), reemissão controlada por regra, com histórico e log de cada transmissão.
 
 #### FIS-005 Download do arquivo de lote
 - **Tipo:** NFS-e
-- **Origem:** `FuncoesNFSE.php`, `download($local, $arquivoNome)` (l. 174-182); botão "Baixar o arquivo!" em `ExportarNFSE.php` (l. ~224-246, função `success`).
-- **Regra [obs]:** envia `Content-Disposition: attachment` com `text/plain`; `filesize($local.$arquivoNome)` e `readfile($caminho."/loteNFSE/".$arquivoNome)` usam caminhos diferentes e `$caminho` não existe dentro da função (inconsistência) [inf: a função provavelmente não funciona isoladamente]. A ação do botão no JS está vazia.
+- **Origem:** `ControlNotaFiscalServico.php` l. 350-357 (`exportar`); `FuncoesNFSE.php` `download()` (l. 174-182, não chamada); botão "Baixar o arquivo!" em `ExportarNFSE.php` (função `success`, não chamada).
+- **Regra [obs]:** o download é a própria resposta da ação `exportar` (cabeçalhos `Content-Disposition: attachment`, `text/plain`, `Content-Length` e `readfile` do arquivo recém-gravado). Não há tela de sucesso nem de re-download; o arquivo permanece em `$path_nfse` (pasta `loteNFSE/`) e nenhuma tela fornecida lista esses arquivos [inf]. Se a gravação falhar (`fwrite` falso) nada é devolvido ao usuário.
 - **Tabelas:** nenhuma.
 - **Equivalente no ERP novo:** download do XML/PDF autorizado a partir do repositório de documentos; sem arquivo TXT.
 
 #### FIS-006 Importação do retorno da NFS-e
 - **Tipo:** NFS-e
-- **Origem:** `ImportarNFSE.php` (formulário). Processamento em `ControlNotaFiscalServico.php`, `action=importar`, `type=notafiscalservico`, arquivo `importa`, `where` (hidden) [nf].
-- **O que o usuário faz:** escolhe o arquivo de retorno do portal (label mostra o nome), clica "Importar"; "Voltar" retorna a `NotaFiscalServico.php?where=100`.
-- **Regra [obs]:** só o formulário (upload `multipart`, campo obrigatório). **O parser não foi fornecido.** Pelas colunas `nota_fiscal_servico.nr_nfse` e `nr_verificacao_nfse` e pelos campos `ctrt.nr_nfse`/`nfse_emitida`, o retorno provavelmente grava número da NFS-e e código de verificação por RPS [inf].
-- **Tabelas:** `nota_fiscal_servico` (`nr_nfse, nr_verificacao_nfse`) [inf].
-- **Equivalente no ERP novo:** eliminado como passo manual; o retorno vem na resposta/consulta do Web Service (número, código de verificação, XML da NFS-e), gravado automaticamente. Manter, se necessário, importação de XMLs antigos para histórico.
+- **Origem:** `ImportarNFSE.php` (formulário); `ControlNotaFiscalServico.php`, `action=importar`, `type=notafiscalservico`, arquivo `importa` (linhas 359-423).
+- **O que o usuário faz:** em "Importar NFS-e" (botão na consulta), escolhe o arquivo de retorno do portal e clica "Importar"; recebe alertas JavaScript "Importado com sucesso!" ou "Erro ao importar!"; "Voltar" retorna a `NotaFiscalServico.php?where=100`.
+- **Regra de negócio [obs]:**
+  - O arquivo é movido para `$path/csv/<nome original>` (sem sanitizar o nome) e lido com `fgetcsv(..., ";")`: **CSV com separador `;`**, diferente do TXT de envio.
+  - Considera apenas linhas cujo primeiro campo é `2`. Colunas usadas (índices a partir de 0): `[1]` número da NFS-e, `[3]` código de verificação, `[6]` número do RPS, `[8]` inscrição municipal do tomador (lida, não usada), `[26]` valor do serviço em formato brasileiro (`1.234,56` convertido para `1234.56`).
+  - `$row` conta todas as linhas do arquivo e subtrai 3 (pressupõe cabeçalho e rodapés); o laço percorre `$row` posições do vetor de linhas tipo 2. Se o arquivo tiver número diferente de linhas extras, itera a mais ou a menos [inf].
+  - Em transação (`BEGIN`/`COMMIT`/`ROLLBACK`), para cada linha busca `WHERE emitiu_nf = 'S' AND nr_rps = <rps> AND valor_servico = <valor>` (sem filtrar por empresa) e executa `UPDATE nota_fiscal_servico SET situacao='E', nr_verificacao_nfse=<cód>, nr_nfse=<número> WHERE id=<id>`.
+  - Linha do arquivo sem RPS correspondente: apenas `a("Não foi possivel recuperar informações da RPS")` e segue; **não conta como erro** e o final ainda diz "Importado com sucesso". Só falha de UPDATE faz `ROLLBACK`.
+  - Redireciona para `CnsNotaFiscalServico.php` (arquivo inexistente nos fontes recebidos). A consulta de empresa dentro do laço usa `$rps[0][0]['nr_empresa']` (indexação errada) e o resultado não é usado.
+- **Tabelas/colunas:** lê/grava `nota_fiscal_servico` (`situacao, nr_nfse, nr_verificacao_nfse`; busca por `emitiu_nf, nr_rps, valor_servico`).
+- **Equivalente no ERP novo:** eliminado como passo manual; o retorno vem na resposta/consulta do Web Service (número, código de verificação, XML da NFS-e), gravado automaticamente e casado pelo identificador do documento, não por RPS + valor. Manter, se necessário, importação de arquivos/XMLs antigos para histórico.
+
+#### FIS-007 Consulta de NFS-e e RPS emitidas
+- **Tipo:** NFS-e
+- **Origem:** `NotaFiscalServico.php` (tela "Consulta de NFS-e [empresa]"); `ControlNotaFiscalServico.php`, `action=consulta` (l. 12-61).
+- **O que o usuário faz:** vê a grade paginada (10 por página): RPS (clicável, abre edição; FIS-009), NFS-e (clicável: abre no portal da prefeitura o link `url_nfse` + `ccm=<IM da empresa>&nf=<nº NFS-e>&cod=<código de verificação>`), Cliente, Valor (`valor_servico`), ISS, PCC, Emissão, Situação (Aberta, Emitida, Cancelada) e botão "Cancelar" (desabilitado se Cancelada). Atalhos "Exportar RPS" e "Importar NFS-e". Filtros (tela de busca [nf], enviados por POST): número (RPS ou NFS-e), contrato, cliente (nome), CPF/CNPJ, valor, período de emissão.
+- **Regra de negócio [obs]:**
+  - Empresa: na página, empresa da sessão (1 e 4 formam grupo `IN(1,4,0)`); no Control, `nr_empresa IN (1, 4)` fixo.
+  - Cliente por nome ou CPF/CNPJ: busca ids em `payment_fornecedor` e monta `nr_cliente IN (...)`, mas o laço usa sempre `$sel_clie[0][0]` (o primeiro resultado repetido) e, sem resultado, gera `IN ()` (erro). Em `NotaFiscalServico.php` o mesmo filtro compara `nr_cliente = <texto digitado>`.
+  - Precedência de `OR` no filtro por número (ver FIS-001).
+  - O filtro final é guardado em `$_SESSION['where_nfse']` e reaproveitado por FIS-001.
+  - Valor mostrado = `valor_servico` (não o líquido `valor_total`).
+- **Tabelas/colunas:** `nota_fiscal_servico`, `payment_fornecedor` (`Empresa, Empresa_complemento, CGCCPF`), `empresa.nr_inscriMun`, `info_fiscal_empresa.url_nfse`.
+- **Equivalente no ERP novo:** listagem de NFS-e por empresa com busca por número, tomador, período, status e valor; links para XML/PDF oficiais e para a consulta pública; status vindos do Web Service.
+
+#### FIS-008 Geração de RPS a partir de parcelas e cálculo de impostos
+- **Tipo:** NFS-e
+- **Origem:** `ControlNotaFiscalServico.php`: `action=gerarnotafiscal` (l. 425-615, lista parcelas) e `action=gera-nfse` (l. 617-743, grava RPS); funções `preparaDescricao` (l. 783), `atualizaParcelas`, `atualizaUltNum`. A tela de filtros que dispara `gerarnotafiscal` não foi fornecida [nf].
+- **O que o usuário faz:** informa período de vencimento (obrigatório), contrato, cliente (nome ou razão), CPF/CNPJ e valor; vê a grade (Contrato, Parcela, NFS-e "Ainda nao possui", Cliente, Valor, Emissão, Vencimento) com "Última NFS-e emitida" (`nr_ultima_rps`), marca as parcelas e clica "Gerar NFS-e". Recebe alertas "RPS geradas com sucesso!" ou erro e volta à consulta.
+- **Regra de negócio [obs]:**
+  - Parcelas elegíveis: `pd.dt_vencto BETWEEN ... AND p.nr_item IN (188, 171) AND pd.gerado_svascm = 'N'` (sem filtro de situação de pagamento e sem filtro de empresa). O filtro de valor usa a variável inexistente `$nr_valor` (o correto seria `$nrValor`), gerando SQL inválido quando preenchido. Se o filtro de cliente/CPF não encontra ninguém, é **ignorado** e a lista vem sem restrição de cliente.
+  - **Empresa fixa 4** (`$empresa = 4`) na geração e no contador. RPS nº = `nr_ultima_rps` (campo oculto lido ao listar) + (posição na seleção + 1); um RPS por parcela selecionada. Se o valor do checkbox tiver parcelas unidas por `;`, todas entram no `IN`, mas só a primeira (`$rps[0]`) fornece valor, contrato e vencimento.
+  - Valor do serviço = `nr_valor` da parcela. Descrição: para o item 188, mantém o texto até `]` ou acrescenta ` [parcela / última parcela]`; para os demais itens, corta em `[`; usa o trecho entre o primeiro e o segundo `*` da descrição financeira e remove apóstrofos.
+  - **ISS:** só é calculado se `info_fiscal_empresa.reter_iss = 'S'`: `valor_iss = round(valor x aliq_iss / 100, 2)` e `iss_retido='S'`; caso contrário `valor_iss = 0` e `iss_retido='N'` (o ISS devido pelo prestador não é calculado).
+  - **Retenções:** PIS, COFINS, INSS, IR e CSLL são calculados com as alíquotas de `info_fiscal_empresa` (`aliq_*`) apenas quando a **pessoa** do cliente (`pessoa.reter_pis/cofins/inss/ir/csll = 'S'`, via `payment_fornecedor.nr_pessoa`) está marcada; `round(,2)`. PCC = PIS + COFINS + CSLL.
+  - `valor_deducao = 0` fixo (comentário no código cita orientação interna de 04/05/2022 de que a dedução é sempre zero para a empresa). `valor_total = valor - (INSS + IR + PCC)` (o ISS retido não é subtraído).
+  - INSERT em `nota_fiscal_servico`: `nr_rps, nr_contrato` (=`payment.nr_ctrt`), `nr_cliente` e `nr_pessoa` (**ambos recebem o id de `payment_fornecedor`**), `dt_emissao` (data e hora atuais em coluna `date`), `dt_vencimento`, `valor_servico`, `valor_deducao`, `valor_total`, `cod_servico` (da empresa 4), `iss_retido`, alíquotas e valores dos tributos, `desc_servico`, `emitiu_nf='N'`, `nr_empresa=4`, `nr_payment_detalhe` (da primeira parcela); `situacao` assume 'A'.
+  - Em seguida: `log_envio` (`tipo='nota_fiscal_servico'`, `path='NFSE'`), `payment_detalhe.gerado_svascm='S'` e `info_fiscal_empresa.nr_ultima_rps = nº` (`WHERE nr_empresa = 4`). `BEGIN`/`COMMIT` **por parcela**; alerta e redirecionamento (JavaScript) emitidos dentro do laço, um por parcela; falha numa parcela não desfaz as anteriores.
+- **Tabelas/colunas:** lê `payment_detalhe`, `payment`, `payment_fornecedor`, `pessoa` (`reter_*`), `empresa` (`cod_servico, nr_fiscal`), `info_fiscal_empresa` (`reter_iss, aliq_iss/pis/cofins/inss/ir/csll, nr_ultima_rps`). Grava `nota_fiscal_servico`, `log_envio`, `payment_detalhe.gerado_svascm`, `info_fiscal_empresa.nr_ultima_rps`.
+- **Equivalente no ERP novo:** emissão de NFS-e SP layout 2 a partir de um fato gerador (contrato/faturamento), com impostos calculados por regras parametrizáveis com vigência (ISS, retenções, IBS/CBS), numeração de RPS por série com reserva atômica, empresa emissora derivada do contrato, transação por lote com falha parcial controlada.
+
+#### FIS-009 Edição, cancelamento e reaproveitamento de RPS
+- **Tipo:** NFS-e
+- **Origem:** `ControlNotaFiscalServico.php`: `action=load` (l. 98-237), `save` (l. 238-287), `cancel` (l. 63-96); `funcoes.php`: `cancelaNFSE()` (l. 2157), `cancelaPayment()` (l. 2145). A interface (janela e confirmação) está em `NotaFiscalServico.js` [nf].
+- **O que o usuário faz:** clica no número do RPS na consulta, vê o formulário (RPS, NFS-e, código de verificação, emissão, vencimento, cliente, contrato, PIS, COFINS, CSLL, IR, INSS, total do serviço, deduções, valor total, descrição), altera e salva; ou clica "Cancelar" na linha informando motivo e se deseja reutilizar a RPS.
+- **Regra de negócio [obs]:**
+  - **Edição:** `UPDATE nota_fiscal_servico` de `dt_vencimento`, `valor_pis/cofins/csll/ir/inss`, `valor_servico`, `valor_deducao`, `valor_total`, `desc_servico`; atualiza `log_envio.vencimento` (`tipo='nota_fiscal_servico'`). Não recalcula ISS nem total e não restringe pela situação (RPS já emitida ou cancelada pode ser alterada). **`desc_servico` passa por `toMoneySQL()`**, que remove todos os pontos e troca vírgulas por pontos no texto. Sem escape de SQL. A resposta JSON devolve o próprio SQL. O formulário busca o nome do cliente em `pessoa` com `nr_pessoa`, que na tabela fiscal guarda o id de `payment_fornecedor` [inf: nome errado ou vazio].
+  - **Cancelar:** `cancelaNFSE`: `situacao='C'`, `dt_cancelamento` (data), `motivo_cancelamento`, `usu_cancela`; depois `cancelaPayment(<nr_contrato>)` executa `UPDATE payment ... nr_situacao_pagamento = 3 WHERE nr_payment = <nr_contrato> LIMIT 1` e igual em `payment_detalhe`: **usa o número do contrato como chave de `payment`**, atingindo outro registro [obs]. O Control ainda sobrescreve o retorno (`$canc = true`), então sempre responde sucesso.
+  - **Reutilizar (`reutiliza = 'S'`):** localiza a parcela de origem (pelo `nr_payment_detalhe` do RPS ou, se vazio, por vencimento + cliente + valor) com item 188 ou 171 e faz `gerado_svascm = 'N'`, devolvendo-a à fila de FIS-008.
+  - É apenas marca local: nenhum trecho fornecido comunica o cancelamento à prefeitura (cancelamento no portal presumivelmente manual) [inf].
+- **Tabelas/colunas:** `nota_fiscal_servico` (colunas acima + `situacao, dt_cancelamento, motivo_cancelamento, usu_cancela`), `payment`, `payment_detalhe`, `log_envio`, `pessoa.nm_pessoa`.
+- **Equivalente no ERP novo:** documento autorizado imutável; correção por cancelamento/substituição via evento no Web Service (com motivo/código e prazos da prefeitura), reaproveitamento = nova emissão vinculada à mesma fatura. Cancelar documento nunca altera lançamentos financeiros por outra chave.
 
 ### Bloco B. SCM, nota de comunicação modelo 21
 
@@ -151,7 +210,7 @@ Legenda do tipo: **NFS-e** = NFS-e São Paulo; **Mod.21** = nota fiscal de servi
 
 #### FIS-011 Geração/emissão de SCM
 - **Tipo:** Mod.21
-- **Origem:** `ControlSCM.php`, `action=atualiza` (l. 223-431); `PDF_SCM.php` (`pdfSCM`); `LogEnvio.php` [nf].
+- **Origem:** `ControlSCM.php`, `action=atualiza` (l. 223-431); `PDF_SCM.php` (`pdfSCM`); `LogEnvio.php`.
 - **O que o usuário faz:** marca parcelas (individual, vários, "marcar todos"), ajusta a data de emissão e clica "Gerar SCM". Sucesso: redireciona para `SCM.php?G=1` ("SCM geradas com sucesso!"). Erro: **desfaz tudo e não redireciona nem mostra mensagem** (o redirect de erro está comentado, l. 429).
 - **Regra de negócio [obs]:**
   - Cada valor de checkbox é um id de `payment_detalhe` ou uma lista separada por `;` (parcelas unificadas); vira `IN (...)`.
@@ -189,19 +248,21 @@ Legenda do tipo: **NFS-e** = NFS-e São Paulo; **Mod.21** = nota fiscal de servi
 
 #### FIS-014 Código de autenticação do SCM
 - **Tipo:** Mod.21
-- **Origem:** `ControlSCM.php`, `calculaCodAutenticacao()` (l. 898-904); exibição `mascara($cod, 'autenticacao-scm')` (`funcoes.php` [nf]).
+- **Origem:** `ControlSCM.php`, `calculaCodAutenticacao()` (l. 898-904); exibição `mascara($cod, 'autenticacao-scm')` (`funcoes.php`).
 - **Regra [obs]:** `strtoupper(md5( CGCCPF_do_cliente . nr_scm . valor . '000000' . emissao(Y-m-d) . nr_cnpj_empresa ))`. O comentário lista a ordem a) CNPJ/CPF do tomador; b) nº do documento; c) valor total; d) BC ICMS; e) ICMS; f) data de emissão; g) CNPJ do emitente. Na implementação, BC e ICMS viram o texto fixo `000000`, o valor entra "cru" (sem 2 casas fixas), a data entra com hífens, e CNPJ/CPF entram como estão no cadastro (com ou sem máscara) [inf: não segue a formatação de largura fixa usada em `documentoMestreFiscal`]. O código é gravado em `scm.cod_autenticacao` (varchar 35) e **não é recalculado** quando o valor é editado depois (FIS-016).
 - **Equivalente no ERP novo:** substituído pela chave de acesso e protocolo de autorização da NFCom; não migrar o MD5 (apenas preservar o histórico).
+- **Formato de exibição [obs]:** `mascara($cod, 'autenticacao-scm')` (`funcoes.php`, l. 791-846) agrupa os 32 caracteres em 8 blocos de 4 separados por ponto (`####.####....`).
 
 #### FIS-015 Consulta de SCM emitidas
 - **Tipo:** Mod.21
-- **Origem:** `SCM.php` (botão "Consulta SCM", `id=consulta`) e `ControlSCM.php`, `action=consulta` (l. 436-495). Listagem em `CnsSCM.php` [nf].
+- **Origem:** `SCM.php` (botão "Consulta SCM", `id=consulta`) e `ControlSCM.php`, `action=consulta` (l. 436-495). Listagem em `CnsSCM.php`.
 - **O que o usuário faz:** usa os mesmos filtros; o formulário é submetido (POST) e o usuário vai para a lista de SCM.
 - **Regra [obs]:**
   - Monta `$_SESSION['where_scm']` (fragmento SQL em sessão) com: `nr_scm = <campo Contrato/SCM>` (**aqui o campo filtra o número da SCM, não o contrato**, diferente da consulta de parcelas), vencimento entre datas, emissão entre datas, cliente (`Empresa LIKE` ou `RazaoSocial LIKE`, vira `nr_payment_fornecedor IN (...)`; se nada casar, gera `IN ()` e erro de SQL).
   - Filtro de empresa: se a empresa da sessão é 1 ou 4 => `nr_empresa IN (1, 4, 0)`; caso contrário `nr_empresa = <sessão>`. O seletor "Unidade de Negócio" da tela (`opt`) é lido mas **não é usado** no SCM.
 - **Tabelas:** `scm`, `payment_fornecedor`.
 - **Equivalente no ERP novo:** listagem de documentos fiscais com filtros por número, cliente, período, empresa, status (autorizada, cancelada, rejeitada, contingência), exportação e ações em lote; sem fragmento SQL em sessão.
+- **Tela de consulta `CnsSCM.php` [obs]:** lê `$_SESSION['where_scm']` (se vazio, reconstrói a partir do request com `AND` inicial, o que gera `WHERE  AND ...` inválido; o ramo usa `$nr_empresa`, variável inexistente) e executa `SELECT * FROM scm` + filtro, 10 por página. Colunas: SCM (clicável, abre a impressão), Cliente (`Empresa` + `Empresa_complemento`), Valor, Emissão, Vencimento e ícone de edição (abre `formSCM.php`). Linha em vermelho se `situacao='S'` (cancelada). Botões: "Exportar Lote" (abre `ImpressaoSCM.php` sem `id`, imprimindo todas as notas do filtro em um PDF), "Exportar Talonário" (FIS-021) e "Voltar". O botão "Faturar" está comentado.
 
 #### FIS-016 Edição de SCM emitida
 - **Tipo:** Mod.21
@@ -234,10 +295,11 @@ Legenda do tipo: **NFS-e** = NFS-e São Paulo; **Mod.21** = nota fiscal de servi
   - `strpos(';', $scm['nr_payment_detalhe'])` tem os argumentos invertidos e o resultado (`$itens`) não é usado.
 - **Tabelas:** `scm`, `empresa` + `ender` (LEFT JOIN, mas endereço do banco não é usado), `payment_fornecedor`.
 - **Equivalente no ERP novo:** **DANFE-COM** gerado a partir do XML autorizado (com QR Code/chave de acesso), reimpressão a qualquer momento; dados do emitente vindos do cadastro da empresa; sem ICMS calculado por fator fixo.
+- **Pontos de entrada [obs]:** clique no número da SCM em `CnsSCM.php` (`?id=`), botão "Imprimir SCM" em `formSCM.php` e botão "Exportar Lote" em `CnsSCM.php` (sem `id`, usa o filtro da sessão).
 
 #### FIS-019 PDF armazenado do SCM e registro para e-mail de cobrança
 - **Tipo:** Mod.21 / SVA / ND
-- **Origem:** `PDF_SCM.php` `pdfSCM($id)`; `PDF_SVA.php` `pdfSVA($id)`; `PDF_Nota_Debito.php` `pdfNotaDebito($id)`; `LogEnvio.php` [nf] (`keysLogEnvio`, `insertLogEnvio`).
+- **Origem:** `PDF_SCM.php` `pdfSCM($id)`; `PDF_SVA.php` `pdfSVA($id)`; `PDF_Nota_Debito.php` `pdfNotaDebito($id)`; `LogEnvio.php` (`keysLogEnvio`, `insertLogEnvio`).
 - **Regra [obs]:** os PDFs são criados na emissão e recriados na edição, em `PDF_Scm/`, `PDF_Sva/`, `PDF_Nota_Debito/` (`{id}_SCM.pdf`, `{id}_SVA.pdf`, `{id}_NotaDebito.pdf`). `log_envio` guarda `tipo` ('scm', 'sva', 'nota_debito'), `id_tipo`, `vencimento`, `path`, `enviado` ('N' padrão), `nr_func_criacao`, `dt_criacao`, `nr_func_envio`, `dt_envio` e datas de lembrete/inadimplente — usado por rotinas de e-mail de cobrança fora do escopo destes arquivos.
   - `PDF_SCM.php` replica `ImpressaoSCM.php` com diferenças: usa `$scm['nr_valor_total']` onde `$scm` é lista (deveria ser `$scm[0]`), então o "Valor do ICMS" do PDF guardado sai **0,00** [inf]; `str_replace($cliente[0]['Telefone'])` com um só argumento; `$i` indefinido. O PDF guardado e o PDF impresso são, portanto, **dois documentos diferentes para o mesmo SCM**.
   - O corte de razão social do tomador é 80 (PDF_SCM) x 70 (ImpressaoSCM).
@@ -247,16 +309,18 @@ Legenda do tipo: **NFS-e** = NFS-e São Paulo; **Mod.21** = nota fiscal de servi
 #### FIS-020 Arquivos do Convênio ICMS 115/03 (mestre e item)
 - **Tipo:** Mod.21
 - **Origem:** `ControlSCM.php`: `documentoMestreFiscal()` (l. 647-694), `documentoItemFiscal()` (l. 593-639), `gravaArquivo()` (l. 725-740), `autDigital()` (l. 749-757), `compactFile()` (l. 702-715). **Nenhuma tela ou `action` fornecida chama essas funções** [obs]; o chamador (provavelmente `CnsSCM.php`) não foi fornecido [nf].
-- **Regra [obs]:** monta registro de largura fixa com os campos da seção 3.2, nome do arquivo `UF + CNPJ emitente + modelo + série + AAMM da emissão + situação + "M.001"`. Problemas visíveis: (1) `documentoItemFiscal` é cópia quase idêntica de `documentoMestreFiscal` (mesmos campos, nome de arquivo termina em `M.001` também, sem campos próprios de item); (2) `autDigital()` itera `$registros` (inexistente; o parâmetro é `$registro`) e devolve sempre o MD5 de string vazia (`d41d8cd98f00b204e9800998ecf8427e`) [inf]; (3) `gravaArquivo()` usa `$path_scm` indefinido, ignora a string `$info` montada e grava o **array** `$data` com `file_put_contents` e faz `echo` do resultado; (4) `compactFile()` usa `$path_compact` indefinido; (5) **não há função para o arquivo de cadastro de destinatários**; (6) a ordem final dos campos depende da ordem das chaves do array montado pelo chamador, que não foi fornecido. Conclusão: **o código dos arquivos do Convênio 115 está incompleto/não funcional nos fontes fornecidos**.
+- **Regra [obs]:** monta registro de largura fixa com os campos da seção 3.2, nome do arquivo `UF + CNPJ emitente + modelo + série + AAMM da emissão + situação + "M.001"`. Problemas visíveis: (1) `documentoItemFiscal` é cópia quase idêntica de `documentoMestreFiscal` (mesmos campos, nome de arquivo termina em `M.001` também, sem campos próprios de item); (2) `autDigital()` itera `$registros` (inexistente; o parâmetro é `$registro`) e devolve sempre o MD5 de string vazia (`d41d8cd98f00b204e9800998ecf8427e`) [inf]; (3) `gravaArquivo()` usa `$path_scm` indefinido, ignora a string `$info` montada e grava o **array** `$data` com `file_put_contents` e faz `echo` do resultado; (4) `compactFile()` usa `$path_compact` indefinido; (5) **não há função para o arquivo de cadastro de destinatários**; (6) a ordem final dos campos depende da ordem das chaves do array montado pelo chamador, que não foi fornecido. (7) `charComplete()` (`funcoes.php`, l. 1781) usa `STR_PAD_.$type` (constante inexistente concatenada à letra N ou X); em PHP 5.6 o `str_pad` recebe texto no 4º argumento (esperado inteiro), emite aviso e devolve `NULL` [inf]: **todos os campos formatados por `charComplete` ficariam vazios**. O `$side` calculado nunca é usado. A intenção aparente é 'N' = numérico com zeros e 'X' = alfanumérico com espaços. Conclusão: **o código dos arquivos do Convênio 115 está incompleto/não funcional nos fontes fornecidos**.
 - **Tabelas:** nenhuma lida diretamente (recebe array).
 - **Equivalente no ERP novo:** não se aplica ao modelo 62 (NFCom é XML via SEFAZ). Confirmar com o contador se há obrigação residual para documentos modelo 21 do passado (ver seção 5).
 
 #### FIS-021 Talonário / relatório de notas (SCM, SVA e ND)
 - **Tipo:** Mod.21 / SVA / ND
-- **Origem:** `Talonario.php` (recebe POST `tabela` e `campos`; chamado por tela não fornecida).
-- **O que o usuário faz:** gera um relatório HTML com Num. NF, Valor Total, Data Emissão, Data Prestação, Cliente, CNPJ/CPF, CFOP, Status e linha de Total; título conforme a tabela: "Relatório de Notas Fiscais SVA", "...Modelo 21/22" ou "...Notas de Débito".
-- **Regra [obs]:** executa `SELECT $campos FROM $tabela $where ORDER BY $campo` onde `$tabela` e `$campos` vêm **direto do POST**; o `$where` vem de `$_SESSION['where_sva' | 'where_scm' | 'where_nota_debito']`. Espera aliases `nf, valor, emissao, vencimento, cliente, cpf_cnpj, cfop, status`. "Data Prestação" exibe o alias `vencimento`. CPF/CNPJ mascarado conforme tamanho (>11 => CNPJ). Soma o total antes de formatar. A sessão de ND usada na consulta (`asEDs`) é **diferente** de `where_nota_debito` (o relatório de ND provavelmente ignora o filtro) [inf]. O teste `strpos(UPPER(where),'WHERE') ? ...` falha se "WHERE" estiver na posição 0.
-- **Tabelas:** `scm`, `sva` ou `nota_debito` (via POST).
+- **Origem:** `Talonario.php` (POST `tabela` e `campos`); chamado por `printTalonario()` em `CnsSCM.php`, `CnsSVA.php` e `CnsNotaDebito.php`.
+- **O que o usuário faz:** na consulta clica "Exportar Talonário"; abre uma janela, o relatório HTML é escrito nela e a impressão é disparada automaticamente. Colunas: Num. NF, Valor Total, Data Emissão, Data Prestação, Cliente, CNPJ/CPF, CFOP, Status e linha de Total; título "Relatório de Notas Fiscais SVA", "...Modelo 21/22" ou "...Notas de Débito".
+- **Regra [obs]:**
+  - A **tela monta o SQL no JavaScript** e o envia: SCM = `scm INNER JOIN payment_fornecedor`, campos `nr_scm AS nf, nr_valor_total AS valor, dt_emissao AS emissao, dt_vencimento AS vencimento, cfop, IF(situacao='N','Aceito','Cancelado') AS status, Empresa AS cliente, CGCCPF AS cpf_cnpj`; SVA e ND análogos, com `0 AS cfop` e `IF(situacao='A',...)`. `Talonario.php` executa `SELECT $campos FROM $tabela $where ORDER BY $campo` com esses valores do POST; os campos `where` e `sql` também enviados pela tela são ignorados (usa a sessão).
+  - O `$where` vem de `$_SESSION['where_sva' | 'where_scm' | 'where_nota_debito']`. Para ND, `CnsNotaDebito.php` copia o filtro para `where_nota_debito`, logo o talonário de ND **respeita** o filtro (corrige a hipótese anterior). "Data Prestação" exibe o alias `vencimento`. CPF/CNPJ mascarado conforme tamanho (>11 => CNPJ). Soma o total antes de formatar. O teste `strpos(UPPER(where),'WHERE') ? ...` falha se a palavra estiver na posição 0.
+- **Tabelas:** `scm`, `sva` ou `nota_debito` + `payment_fornecedor`.
 - **Equivalente no ERP novo:** relatório/livro de saídas de documentos fiscais por período, empresa e tipo, com exportação (CSV/PDF/XML em lote para o contador). Sem SQL vindo do navegador.
 
 ### Bloco C. SVA, fatura de serviço de valor adicionado
@@ -284,16 +348,18 @@ Legenda do tipo: **NFS-e** = NFS-e São Paulo; **Mod.21** = nota fiscal de servi
 
 #### FIS-033 Consulta de SVA emitidas
 - **Tipo:** SVA
-- **Origem:** `ControlSVA.php`, `action=consulta` (l. 441-499); `CnsSVA.php` [nf].
+- **Origem:** `ControlSVA.php`, `action=consulta` (l. 441-499); `CnsSVA.php`.
 - **Regra [obs]:** monta `$_SESSION['where_sva']`: `nr_sva = <campo>` (filtra número do SVA), vencimento, emissão, cliente (`nr_cliente_payment IN (...)`), e **empresa a partir do seletor `opt`** (1 ou 4 => `IN (1,4,0)`), diferente do SCM.
 - **Tabelas:** `sva`, `payment_fornecedor`.
 - **Equivalente no ERP novo:** igual a FIS-015.
+- **Tela de consulta `CnsSVA.php` [obs]:** mesma estrutura de `CnsSCM.php` (10 por página; colunas SVA, Cliente, Valor, Emissão, Vencimento e edição; vermelho se `situacao='C'`), com `echo "entrou na data"` de depuração no ramo sem sessão. "Exportar Lote" e o clique no número abrem `ImpressaoSVA.php` [nf]; "Exportar Talonário" chama FIS-021.
 
 #### FIS-034 Edição de SVA emitida
 - **Tipo:** SVA
-- **Origem:** `ControlSVA.php`, `action=gravar` (l. 504-533); `formSVA.php` [nf].
+- **Origem:** `ControlSVA.php`, `action=gravar` (l. 504-533); `formSVA.php`.
 - **Regra [obs]:** `UPDATE sva SET dt_vencimento, nr_valor, observacao, dt_alteracao, func_alteracao`; atualiza `log_envio.vencimento` (`tipo='sva'`); refaz o PDF. **Descrição e valor entram no SQL sem escape** (quebra com aspas e permite injeção).
 - **Equivalente no ERP novo:** edição só em rascunho; fatura emitida só por cancelamento/substituição.
+- **Tela `formSVA.php` [obs]:** abre por `?id=`; mostra número, emissão, cliente; permite editar vencimento, valor (máscara de moeda) e observação (textarea); botões "Imprimir SVA" (`ImpressaoSVA.php?id=`, [nf]), "Cancelar/Ativar SVA" (confirmação JS e POST `cancela-sva`/`ativa-sva`) e "Gravar". O formulário lê `descricao` de `sva`, coluna inexistente (a coluna é `observacao`); a exibição troca `||` por `<br/>` apenas nessa variável não usada.
 
 #### FIS-035 Cancelamento e reativação de SVA
 - **Tipo:** SVA
@@ -337,17 +403,19 @@ Legenda do tipo: **NFS-e** = NFS-e São Paulo; **Mod.21** = nota fiscal de servi
 
 #### FIS-042 Consulta de Nota de Débito emitidas
 - **Tipo:** ND
-- **Origem:** `ControlNotaDebito.php`, `action=consulta` (l. 379-420); `CnsNotaDebito.php` [nf].
+- **Origem:** `ControlNotaDebito.php`, `action=consulta` (l. 379-420); `CnsNotaDebito.php`.
 - **Regra [obs]:** monta `$_SESSION['asEDs']` (fragmento ` WHERE ...`): `nr_nd = <campo>` (número da ND), emissão, vencimento, cliente. **Cliente: `implode(", ", $clie)` sobre linhas (arrays) gera "Array, Array"**, quebrando o filtro [inf]. A empresa (`opt`) é lida e não usada.
 - **Tabelas:** `nota_debito`, `payment_fornecedor`.
 - **Equivalente no ERP novo:** igual a FIS-015, para o documento adotado.
+- **Tela de consulta `CnsNotaDebito.php` [obs]:** usa `$_SESSION['asEDs']` e copia o resultado para `$_SESSION['where_nota_debito']` (por isso o talonário de ND recebe o filtro). No ramo sem sessão chama `emplode()` (erro de digitação de `implode`; função inexistente, erro fatal). Colunas: Nota de Débito, Cliente, Valor, Emissão, Vencimento e edição. "Exportar Lote" e o clique no número abrem `ImpressaoNotaDebito.php` [nf].
 
 #### FIS-043 Edição de Nota de Débito
 - **Tipo:** ND
-- **Origem:** `ControlNotaDebito.php`, `action=gravar` (l. 422-452); `formNotaDebito.php` [nf].
+- **Origem:** `ControlNotaDebito.php`, `action=gravar` (l. 422-452); `formNotaDebito.php`.
 - **Regra [obs]:** altera `dt_vencimento`, `nr_valor`, `observacao`, `obs`; atualiza `log_envio.vencimento`; refaz PDF. Sem escape (injeção/aspas). Não existe `dt_alteracao`/`func_alteracao` em `nota_debito` (sem auditoria).
 - **Tabelas:** `nota_debito`, `log_envio`.
 - **Equivalente no ERP novo:** igual a FIS-034, com trilha de auditoria.
+- **Tela `formNotaDebito.php` [obs]:** além de vencimento e valor, tem dois campos de texto, "descrição" (`observacao`) e "obs"; botões "Imprimir Nota de Débito" (`ImpressaoNotaDebito.php?id=`, [nf]), "Cancelar/Ativar" e "Gravar".
 
 #### FIS-044 Cancelamento e reativação de Nota de Débito
 - **Tipo:** ND
@@ -367,8 +435,8 @@ Legenda do tipo: **NFS-e** = NFS-e São Paulo; **Mod.21** = nota fiscal de servi
 
 #### FIS-050 Numeração fiscal por empresa
 - **Tipo:** Transversal
-- **Origem:** `ControlSCM.php`, `ControlSVA.php`, `ControlNotaDebito.php` (leituras e gravações de `info_fiscal_empresa`).
-- **Regra [obs]:** um registro por empresa (`info_fiscal_empresa`, `nr_empresa`; ligação `empresa.nr_fiscal`) guarda `nr_ultima_rps`, `nr_ultima_nfse`, `nr_ultima_sva`, `nr_ultima_scm`, `nr_ultima_nd`, e parâmetros `reter_iss`, `aliq_iss/pis/cofins/inss/ir/csll`, `url_nfse`, `path_nfse`. Não há tabela de séries; SCM usa série fixa 'U'. Dois métodos de localizar a linha: por `empresa.nr_fiscal` (tela) e por `nr_empresa` + `ORDER BY nr_info_fiscal DESC LIMIT 1` (gravação). `AUTO_INCREMENT=5` indica poucas linhas (4 criadas) [obs]. Os parâmetros `aliq_*`, `reter_iss`, `url_nfse`, `path_nfse` e `nr_ultima_rps/nfse` **não são usados** nos arquivos fornecidos.
+- **Origem:** `ControlSCM.php`, `ControlSVA.php`, `ControlNotaDebito.php`, `ControlNotaFiscalServico.php` (leituras e gravações de `info_fiscal_empresa`).
+- **Regra [obs]:** um registro por empresa (`info_fiscal_empresa`, `nr_empresa`; ligação `empresa.nr_fiscal`) guarda `nr_ultima_rps`, `nr_ultima_nfse`, `nr_ultima_sva`, `nr_ultima_scm`, `nr_ultima_nd` e parâmetros `reter_iss`, `aliq_iss/pis/cofins/inss/ir/csll`, `url_nfse`, `path_nfse`. `nr_ultima_rps`, `reter_iss`, `aliq_*` e `url_nfse` são usados na geração de RPS (FIS-008) e na consulta (FIS-007) e sempre para a empresa 4; `nr_ultima_nfse` e `path_nfse` não aparecem nos fontes. Não há tabela de séries; SCM usa série fixa 'U'; o RPS usa série `00000`. Dois métodos de localizar a linha: por `empresa.nr_fiscal` (tela) e por `nr_empresa` + `ORDER BY nr_info_fiscal DESC LIMIT 1` (gravação); `checaInfoFiscal()` (`funcoes.php`) é um terceiro. `AUTO_INCREMENT=5` indica poucas linhas. Em todos os fluxos o número vem de campo oculto da página, sem bloqueio.
 - **Equivalente no ERP novo:** tabela de séries por empresa e tipo de documento (NFS-e, NFCom), com reserva atômica do número, índice único (empresa, série, número) e parâmetros fiscais com vigência.
 
 #### FIS-051 Seleção da empresa emissora
@@ -376,6 +444,20 @@ Legenda do tipo: **NFS-e** = NFS-e São Paulo; **Mod.21** = nota fiscal de servi
 - **Origem:** início de todos os arquivos (`$_SESSION['login']['nr_empresa']`), listas de "Unidade de Negócio" em `SCM.php`, `SVA.php`, `NotaDebito.php`.
 - **Regra [obs]:** sem empresa na sessão, redireciona para `ConfiguracaoFinanc.php`. As empresas 1 e 4 são tratadas como um grupo nas consultas de SCM e SVA (`IN (1,4,0)`); `nr_empresa = 0` em `payment` é tratado como "empresa da tela". Há dados fixos por empresa nos PDFs (8, 10 e padrão) [obs].
 - **Equivalente no ERP novo:** multiempresa com CNPJ, inscrições, certificado digital A1, séries e parâmetros por empresa; grupos de empresas configuráveis.
+- **Empresa 4 fixa na NFS-e [obs]:** geração de RPS, exportação e contador usam `nr_empresa = 4` escrito no código, independentemente da empresa selecionada na sessão.
+
+#### FIS-052 Registro de documentos para cobrança (`log_envio`)
+- **Tipo:** Transversal
+- **Origem:** `LogEnvio.php`: `selectLogEnvio()`, `insertLogEnvio()`, `keysLogEnvio()`, `updateLogEnvio()`; usado por `ControlSCM`, `ControlSVA`, `ControlNotaDebito` e `ControlNotaFiscalServico`.
+- **Regra [obs]:** cada documento emitido ganha uma linha em `log_envio` com `tipo` ('scm', 'sva', 'nota_debito', 'nota_fiscal_servico'), `id_tipo`, `nr_payment_fornecedor`, `nr_empresa`, `vencimento`, `path` (PDF; para NFS-e o texto fixo 'NFSE'), `enviado`, `nr_func_criacao`, `dt_criacao`, `nr_func_envio`, `dt_envio`. `insertLogEnvio` monta o INSERT concatenando os valores já com aspas (sem escape); `keysLogEnvio` devolve `enviado` como `''`. `updateLogEnvio` usa `$info[$i]` (índice numérico) em array associativo, ou seja, não funciona como escrito. As edições de vencimento atualizam `log_envio.vencimento`. As colunas `data_envio_lembrete` e `data_envio_inadimplente` são usadas por rotinas de e-mail fora destes arquivos.
+- **Tabelas:** `log_envio`.
+- **Equivalente no ERP novo:** histórico de envio de documentos (e-mail, lembrete, inadimplência) separado do documento fiscal, ligado ao evento "documento autorizado".
+
+#### FIS-053 Camada de dados, auditoria de SQL e utilitários (`funcoes.php`)
+- **Tipo:** Transversal
+- **Origem:** `funcoes.php`: `executar()` (l. 111), `logAtualizacaoSQL()` (l. 172), `errorSQL()` (l. 189), `toDataSQL()`, `convertDateToBd/Br()`, `toMoneySQL()`, `mascara()`, `mesExtenso()`, `redireciona()`, `a()`, `anti_injection()`, `encryptIt/decryptIt()`, `calculaPaginacao()`, `verificaSituacao()`.
+- **Regra [obs]:** `executar($sql)` decide pelo primeiro termo do SQL (SELECT, INSERT, UPDATE, DELETE, BEGIN, COMMIT, ROLLBACK), usa `mysql_query`, devolve linhas (índices numéricos e nomes) ou `true/false` e, a cada INSERT/UPDATE, grava o texto do SQL no log da aplicação (`addLogInsertSQL/addLogUpdateSQL`), um rastro de auditoria por usuário. Em erro chama `errorSQL`, que registra o erro e prepara e-mail de erro (envio comentado). `SELECT` com erro apenas devolve vazio. `toDataSQL` devolve a *string* `NULL` quando vazio. `convertDateToBd` usa `strtotime` (aceita `dd/mm/aaaa` trocando `/` por `-`). `redireciona` e `a` imprimem JavaScript, sem interromper o PHP. `anti_injection` existe, mas não é usada nos fluxos fiscais (e, por listar palavras proibidas e remover `-`, `'` e `?`, corromperia dados). `encryptIt/decryptIt` são apenas `base64` (não é criptografia). `calculaPaginacao` roda a consulta inteira para contar linhas.
+- **Equivalente no ERP novo:** ORM/consultas parametrizadas, transações explícitas, trilha de auditoria de campos alterados (quem, quando, valor anterior/novo), tratamento de erros com exceções e mensagens ao usuário.
 
 ---
 
@@ -383,14 +465,14 @@ Legenda do tipo: **NFS-e** = NFS-e São Paulo; **Mod.21** = nota fiscal de servi
 
 ### 3.1 RPS em TXT para a Nota Fiscal Paulistana (layout 1)
 
-Arquivo texto, uma linha por registro, terminada por `PHP_EOL`, em `loteNFSE/` [nf para o nome e a montagem final]. Origem: `FuncoesNFSE.php`. Posições calculadas somando os tamanhos montados no código (caso tomador CNPJ). Nomes de campo marcados * são inferidos pela ordem, não pelo código.
+Arquivo texto ISO-8859-1, uma linha por registro, terminada por `PHP_EOL` (LF nas amostras), gravado em `$path_nfse` (pasta `loteNFSE/`) com o nome `RPS<primeiro RPS, 6 dígitos>A<último RPS, 6 dígitos>.txt` e entregue como download (FIS-002). Origem: `FuncoesNFSE.php` e `ControlNotaFiscalServico.php`. Posições calculadas somando os tamanhos montados no código (caso tomador CNPJ) e **conferidas posição a posição contra as duas amostras reais** (resultado na subseção abaixo). Nomes de campo marcados * são inferidos pela ordem, não pelo código.
 
 **Registro 1, cabeçalho (28 posições, validado)**
 
 | Pos. | Tam. | Conteúdo no código |
 |---|---|---|
 | 1 | 1 | `1` |
-| 2-4 | 3 | `$info['versao']` (3 posições, deduzido do total 28) [inf] |
+| 2-4 | 3 | `$info['versao']` (3 posições); amostras: `002` fixo [obs] |
 | 5-12 | 8 | `empresa.nr_inscriMun` (só dígitos, zeros à esquerda) |
 | 13-20 | 8 | data atual `AAAAMMDD` (início) |
 | 21-28 | 8 | data atual `AAAAMMDD` (fim) |
@@ -404,11 +486,11 @@ Arquivo texto, uma linha por registro, terminada por `PHP_EOL`, em `loteNFSE/` [
 | 7-11 | 5 | série* | `00000` |
 | 12-23 | 12 | número RPS | `nr_rps`, zeros à esquerda |
 | 24-31 | 8 | data emissão | **data de hoje** `AAAAMMDD` |
-| 32 | 1 | tributação* | **`T` fixo** |
+| 32 | 1 | tributação* | **`T` fixo** (confirmado nas amostras) |
 | 33-47 | 15 | valor dos serviços | `valor_servico` sem separador (centavos) |
 | 48-62 | 15 | valor das deduções | `valor_deducao` |
 | 63-67 | 5 | código do serviço | `empresa.cod_servico` sem pontuação |
-| 68-71 | 4 | alíquota | lê `ali_iss` (inexistente; ver FIS-002) |
+| 68-71 | 4 | alíquota | lê `ali_iss` (inexistente; ver FIS-002); amostras: `0000` (confirmado) |
 | 72 | 1 | ISS retido | 2 = não retido (`N`); 1 = retido |
 | 73 | 1 | indicador tomador | 1 = CPF (`TipoPessoa='F'`); 2 = CNPJ |
 | 74-87 | 14 | CPF/CNPJ do tomador | **11 posições (74-84) se CPF**; zeros à esquerda |
@@ -448,6 +530,31 @@ Total fixo antes da discriminação: 786 caracteres (CNPJ) ou 783 (CPF).
 | 9-23 | 15 | `totalS` (total de serviços) formatado com `number_format(,2)` sem `.` e `,` |
 | 24-38 | 15 | `totalD` (total de deduções), `clear()` + zeros à esquerda |
 
+**Conferência com as amostras reais (`RPS008351A008351.txt` e `RPS008352A008352.txt`) [obs]**
+
+Cada arquivo tem 3 linhas (cabeçalho, 1 detalhe, rodapé), sem linha em branco no final além do LF; tamanhos medidos: cabeçalho 28, rodapé 38, detalhe de 933 e 917 caracteres (as duas com CNPJ, 786 posições fixas + discriminação de 147 e 131 caracteres).
+
+| Item conferido | Resultado nas amostras |
+|---|---|
+| Cabeçalho | `1` + `002` + IM de 8 dígitos + duas datas iguais de 8 dígitos; as datas coincidem com a data de emissão do detalhe |
+| Posições 1-31 do detalhe | `6`, `RPS  `, `00000`, nº RPS de 12 dígitos (igual ao do nome do arquivo), data `AAAAMMDD` |
+| Posição 32 | `T` nas duas (confirma o `T` fixo) |
+| Valores 33-62 | serviço em centavos (15 dígitos) e dedução `000000000000000` |
+| Código de serviço 63-67 | `07498` |
+| Alíquota 68-71 | `0000` nas duas (confirma o bug `ali_iss`) |
+| Retenção 72 / indicador 73 | `2` (não retido) / `2` (CNPJ) |
+| 74-87, 88-95, 96-107 | CNPJ de 14 dígitos; IM do tomador `00000000`; IE de 12 dígitos numéricos |
+| Razão 108-182 | texto com caixa preservada e acentos, preenchido com espaços até 75 |
+| Tipo 183-185 e logradouro 186-275 | 3 letras; logradouro em maiúsculas, **sem espaços nem pontuação**, preenchido com espaços até 90 |
+| Bairro 276-305, cidade 306-355, UF 356-357, CEP 358-365 | maiúsculas, preenchidos com espaços; CEP com 8 dígitos; acentos de cidade preservados (byte ISO-8859-1) |
+| E-mail 366-440 | 75 caracteres completos (vários endereços separados por `;`, cortado no limite) |
+| Tributos 441-535 | PIS, COFINS e CSLL em centavos nas posições previstas (441-455, 456-470, 501-515); demais campos de 15 e 5 dígitos zerados |
+| 536-786 | brancos e zeros exatamente como no código (10 brancos, 24 e 17 zeros, 10 brancos, 15 zeros, 175 brancos) |
+| Discriminação 787-fim | começa com espaço, texto em maiúsculas com `Ç`/`Ã` ainda presentes (tirarAcentos ineficaz), contém `[n/m]` e `R$` + valor, e termina com ` VENCIMENTO: dd/mm/aaaa` |
+| Rodapé | `9` + `0000001` + total de serviços em centavos (15) + `000000000000000` (total de deduções sempre zero) |
+
+Conclusão: o layout da tabela acima **bate com as amostras em todas as posições verificadas**. Não foi possível verificar nas amostras o caso de tomador pessoa física (CPF), de retenção de ISS (`1`) nem de IE `ISENTO`; para esses vale apenas a leitura do código. As alíquotas efetivas de PIS, COFINS e CSLL nas amostras (0,65%, 3% e 1%) vêm do cálculo de FIS-008.
+
 Funções de formatação: `formtInt` (zeros à esquerda, sem truncar), `formtText` (espaços à direita, sem truncar), `clear` (remove `/ - . : espaço , < > ;`), `extraiTipo`, `tirarAcentos` (a/A, e/E, i/I, o/O, u/U, c/C).
 
 ### 3.2 Arquivos do Convênio ICMS 115/03 (SCM)
@@ -456,7 +563,7 @@ Origem: `ControlSCM.php`. As funções existem, mas nenhuma tela fornecida as ch
 
 **Nome do arquivo (mestre e item):** `UF` + `CNPJ do emitente (14)` + `modelo` + `série` + `AAMM da emissão` + `situação` + `M.001` (o comentário descreve: UF + CNPJ + Modelo + Série + Ano + Mês + Status + Tipo + Volume).
 
-**Campos montados (`charComplete(valor, tamanho, 'N'|'X')`; supondo 'N' = numérico com zeros à esquerda e 'X' = alfanumérico com espaços à direita, a função está em `funcoes.php` [nf])**
+**Campos montados (`charComplete(valor, tamanho, 'N'|'X')`; intenção aparente: 'N' = numérico com zeros, 'X' = alfanumérico com espaços; a implementação em `funcoes.php` l. 1781 está defeituosa, ver FIS-020, item 7)**
 
 | Campo | Tam. | Tipo | Valor no código |
 |---|---|---|---|
@@ -500,93 +607,108 @@ A ordem de gravação é a ordem das chaves do array, que o chamador define [nf]
 
 ## 4. Tabelas fiscais envolvidas
 
-Confirmadas no `schema_erp_raicom.sql`.
+Confirmadas no `schema_erp_raicom.sql` e no uso real do código.
 
-| Tabela | Papel | Uso nos arquivos fornecidos |
+| Tabela | Papel | Uso nos arquivos |
 |---|---|---|
-| `nota_fiscal_servico` | RPS/NFS-e: valores, tributos (ISS, PIS, COFINS, INSS, IR, CSLL), `nr_rps`, `nr_nfse`, `nr_verificacao_nfse`, `emitiu_nf`, `situacao`, `nr_pessoa`, `nr_payment_detalhe`, cancelamento | leitura e `emitiu_nf`; demais colunas via telas [nf] |
+| `nota_fiscal_servico` | RPS/NFS-e: valores, tributos (ISS, PIS, COFINS, INSS, IR, CSLL), `nr_rps`, `nr_nfse`, `nr_verificacao_nfse`, `emitiu_nf`, `situacao` ('A' Aberta, 'E' Emitida, 'C' Cancelada), `nr_cliente` e `nr_pessoa` (ambos recebem o id de `payment_fornecedor`), `nr_payment_detalhe`, cancelamento | INSERT (geração de RPS), UPDATE (`emitiu_nf`, importação, edição, cancelamento), SELECT (consulta/exportação) |
 | `nota_fiscal_servico_excluidas` | histórico de exclusão | não usada nos arquivos |
-| `scm` | SCM/Mod. 21 emitidas (nº, autenticação, parcelas, vencimento, CFOP, modelo, série, valor, `bc_icms`, `nr_icms`, situação, auditoria) | leitura/escrita |
+| `scm` | SCM/Mod. 21 emitidas (nº, autenticação, parcelas, vencimento, CFOP, modelo, série, valor, `bc_icms`, `nr_icms`, situação 'N'/'S', auditoria) | leitura/escrita |
 | `scm_excluido`, `scm_BKP_2021-10-29` | histórico/backup | não usadas |
 | `sva` | faturas SVA (`nr_sva`, `observacao`, valor, vencimento, situação 'A'/'C') | leitura/escrita |
 | `sva_excluidos`, `sva_BKP_2021-10-29` | histórico/backup | não usadas |
 | `nota_debito` | Notas de Débito (`nr_nd`, `observacao`, `obs`, situação 'A'/'C') | leitura/escrita |
 | `nota_debito_excluidos` | histórico | não usada |
-| `info_fiscal_empresa` | contadores de numeração e parâmetros fiscais por empresa | leitura/escrita dos contadores |
+| `info_fiscal_empresa` | contadores de numeração (`nr_ultima_rps/scm/sva/nd`) e parâmetros fiscais da NFS-e (`reter_iss`, `aliq_iss/pis/cofins/inss/ir/csll`, `url_nfse`, `path_nfse`) | leitura/escrita; `nr_ultima_nfse` e `path_nfse` sem uso visto |
 | `info_fiscal_empresa_excluidos` | histórico | não usada |
 | `empresa` | emissora: CNPJ, razão social, IE, IM (`nr_inscriMun`), `cod_mun_ibge`, `cod_servico`, `nr_fiscal`, `nr_ender` | leitura |
-| `ender` | endereço da empresa | leitura (ND, SCM) |
+| `ender` | endereço da empresa | leitura (ND; SCM faz LEFT JOIN sem usar) |
 | `empresa_conta` | liga a parcela à empresa (`nr_empresa`) | leitura (filtro) |
-| `payment_fornecedor` | cliente/tomador: nome, CNPJ/CPF, IE, endereço, e-mail, `TipoPessoa`, `cfop`, `unif_notas`, `unif_svascm` | leitura |
-| `payment`, `payment_detalhe`, `conta_receber` | contas a receber: origem das parcelas; flags `gerado_scm`, `nr_scm`, `gerado_svascm`, `nr_svascm` | leitura e marcação |
-| `plano_conta_itens`, `plano_conta_principal` | classificação do lançamento (define SCM/SVA/ND); `ds_item` usado nas descrições | leitura |
+| `payment_fornecedor` | cliente/tomador: nome, CNPJ/CPF, IE, endereço, e-mail, `TipoPessoa`, `cfop`, `unif_notas`, `unif_svascm`, `nr_pessoa` | leitura |
+| `pessoa` | `nm_pessoa` e flags de retenção do cliente `reter_pis`, `reter_cofins`, `reter_inss`, `reter_ir`, `reter_csll` ('S'/'N') | leitura (cálculo de impostos da NFS-e; nome na edição) |
+| `payment`, `payment_detalhe`, `conta_receber` | contas a receber: origem das parcelas; flags `gerado_scm`/`nr_scm` (SCM) e `gerado_svascm`/`nr_svascm` (**NFS-e, SVA e ND**); `nr_situacao_pagamento` (3 = cancelado pelo `cancelaPayment`) | leitura e marcação |
+| `plano_conta_itens`, `plano_conta_principal` | classificação do lançamento (define o documento: SCM 323/175, SVA 324/175/467, ND 174/467/430, NFS-e 188/171); `ds_item` usado nas descrições | leitura |
 | `ctrt`, `ctrt_valor` | contrato (`nm_ctrt`, `nr_nfse`, `nr_sva`, `nr_scm`, `nfse_emitida`, `scmsva_emitida`, `notafiscal`); `mensal_valor` | leitura (ND); colunas de flag sem uso visto |
-| `log_envio` | controle de PDFs e envio de e-mail de cobrança por documento | gravação |
+| `log_envio` | controle de PDFs e envio de e-mail de cobrança por documento (`tipo` 'scm', 'sva', 'nota_debito', 'nota_fiscal_servico') | gravação/atualização de vencimento |
 | `cfop_data` | tabela de CFOP (`cd_cfop`, `ds_cfop`; 6 linhas pelo AUTO_INCREMENT=7) | não referenciada |
 
-Diferenças de tipo relevantes para a migração: `scm.cod_autenticacao varchar(35)`; `scm.situacao char(3)` ('N'/'S'), `sva.situacao char(1)` ('A'/'C'), `nota_debito.situacao char(1)` ('A'/'C'); `scm.dt_cancelamento/dt_atualizacao/dt_ativacao` são `date` (o código grava data e hora); `sva` usa `datetime`; `nota_debito` não tem campos de alteração; `payment_detalhe.nr_svascm` é compartilhado entre SVA e ND, sem indicar o tipo (ambíguo); `nr_payment_detalhe` em `scm`/`sva` é `varchar(300)` com ids separados por `;`; em `nota_debito` é `varchar(50)`; em `nota_fiscal_servico` é `int` (uma parcela). Não há índice único em `nr_scm`, `nr_sva`, `nr_nd` ou `nr_rps`.
-
----
+Diferenças de tipo e inconsistências relevantes para a migração:
+- `scm.cod_autenticacao varchar(35)`; `scm.situacao char(3)` ('N'/'S'), `sva.situacao char(1)` ('A'/'C'), `nota_debito.situacao char(1)` ('A'/'C'), `nota_fiscal_servico.situacao char(1)` ('A'/'E'/'C').
+- `scm.dt_cancelamento/dt_atualizacao/dt_ativacao` e `nota_fiscal_servico.dt_emissao` são `date`; o código grava data e hora (a hora se perde). `sva` usa `datetime`; `nota_debito` não tem campos de alteração.
+- `payment_detalhe.nr_svascm` é compartilhado entre NFS-e, SVA e ND, sem indicar o tipo (ambíguo); `nr_payment_detalhe` em `scm`/`sva` é `varchar(300)` com ids separados por `;`, em `nota_debito` é `varchar(50)`, em `nota_fiscal_servico` é `int` (uma parcela).
+- `nota_fiscal_servico.nr_cliente` e `nr_pessoa` guardam o mesmo id de `payment_fornecedor`, embora `nr_pessoa` também seja o nome da chave da tabela `pessoa` (relação diferente).
+- Não há índice único em `nr_scm`, `nr_sva`, `nr_nd` ou `nr_rps`.
+- Colunas lidas por nome errado: `ali_iss` (real: `aliq_iss`) e `ctrt.nr1_ctrt` (não existe).
 
 ## 5. Dúvidas e pontos a confirmar com o cliente e o contador
+
+Itens da primeira versão que foram **respondidos pelo código/amostras** estão no fim desta seção.
 
 1. **Documento atual do SCM:** hoje sai NFCom (modelo 62) ou ainda modelo 21? Por onde é emitido (portal SEFAZ, outro sistema)? Se o modelo 21 não é mais usado, descartar FIS-018/019/020 do escopo de paridade e manter só leitura do histórico (pendência já registrada no CONTEXTO_PROJETO.md).
 2. **Natureza fiscal do SVA:** a fatura traz o texto "Atividade sem incidência de ISSQN, LC 116/2003". Esse tratamento está correto e aceito pelo contador? O SVA deve virar NFS-e (SP layout 2), permanecer documento gerencial ou ser eliminado? Qual o enquadramento atual (item da lista de serviços)?
 3. **Natureza fiscal da Nota de Débito:** é cobrança de reembolso/despesa (documento gerencial) ou fato gerador de ISS/ICMS? Quais são os itens 174, 467 e 430?
-4. **Significado dos itens de plano de contas** 323 (SCM), 324 (SVA), 175 (rateio 20% SCM / 80% SVA), 467 (SVA e ND ao mesmo tempo), 174, 430. O rateio 20/80 é fixo ou contratual? Qual a base fiscal? O que ocorre quando um item 467 é faturado em SVA e deveria ser ND?
+4. **Significado dos itens de plano de contas:** 323 (SCM), 324 (SVA), 175 (rateio 20% SCM / 80% SVA), 467 (SVA e ND), 174, 430 e, para NFS-e, **188 e 171**. O rateio 20/80 é fixo ou contratual? Qual a base fiscal? Como evitar que um mesmo item (467) seja disputado por SVA e ND, e que NFS-e, SVA e ND compartilhem `gerado_svascm`?
 5. **CFOP:** quais CFOPs estão em uso em `payment_fornecedor.cfop` (campo livre) e no conteúdo de `cfop_data`? O CFOP do cliente pode mudar por operação (interestadual etc.)?
-6. **ICMS e Simples Nacional:** o PDF do SCM mostra "Valor do ICMS = 25% do total" (ImpressaoSCM) ou 0,00 (PDF guardado) e o código tem o texto "empresa optante pelo Simples Nacional" (não impresso). Qual é o regime de cada empresa (CEW, GR Serviços e Telecomunicações, GR Cibersegurança, empresas 1 e 4)? Há ICMS destacado ou não?
-7. **Código de serviço, alíquota e retenções NFS-e:** `empresa.cod_servico` é único por empresa. Há mais de um código por empresa? Qual a alíquota real de ISS (o lote levava `0000` por erro de nome de coluna)? Quando há retenção de PIS/COFINS/CSLL (PCC)? Retenção de INSS/IR (hoje sempre zero no TXT)?
-8. **Tributação T/F:** confirmar o critério correto (município do prestador, do tomador ou do local da prestação) para o layout 2; a regra atual era calculada e ignorada.
-9. **Origem dos RPS (`nota_fiscal_servico`):** como os registros eram criados (tela `NotaFiscalServico.php`, contrato com `notafiscal='S'`)? Solicitar `NotaFiscalServico.php`, `ControlNotaFiscalServico.php` e uma amostra de arquivo de lote e de retorno de `loteNFSE/`.
-10. **Arquivos não fornecidos que precisam ser lidos:** `CnsSCM.php`, `CnsSVA.php`, `CnsNotaDebito.php`, `formSVA.php`, `formNotaDebito.php`, `LogEnvio.php`, `funcoes.php`.
-11. **Convênio 115:** os arquivos mestre/item/cadastro eram realmente gerados e entregues ao fisco? Por qual rotina? Há obrigação residual de entregar arquivos dos períodos em que o modelo 21 foi emitido?
-12. **Séries e numeração:** a série 'U' (única) é a única em uso? Há necessidade de manter a sequência histórica dos números de SCM/SVA/ND e RPS na migração (o novo ERP precisa continuar a partir do último número emitido)?
-13. **Datas:** a data de emissão é digitada e pode ser retroativa; reativar SCM/SVA reinicia a data de emissão para hoje. Qual comportamento deve existir no novo (a NFCom usa a data/hora da autorização)?
-14. **Cancelar e liberar parcela:** ao cancelar um SCM/SVA/ND, a parcela deve voltar à fila de faturamento? Hoje não volta.
-15. **Descrições fixas por cliente** (ids 1581, 2126, 1862, 2551, 2378, 2548, 2351, 2673, 2311, 2757, 2758): ainda estão ativos? Os valores no texto estão atualizados? Migrar como modelo de descrição por cliente/contrato.
-16. **Empresas emissoras:** quais empresas (1, 4, 8, 10 e outras do cadastro; `AUTO_INCREMENT=11` em `empresa`) estarão ativas no novo ERP e com que certificado A1, regime e inscrições? As empresas 1 e 4 formam um grupo (`IN (1,4,0)`): regra de negócio?
-17. **Clientes pessoa física e IE:** `INSCRG` trata "ISENTO"; como tratar tomadores PF, estrangeiros e sem CPF/CNPJ no NFS-e e na NFCom?
-18. **Dois flags de unificação** (`unif_notas` x `unif_svascm`): são o mesmo conceito? O ND deve usar `unif_notas`?
-19. **Faturar parcela "Paga":** por que a tela permite gerar SCM/SVA de parcelas já pagas (opção "Pago" e a remoção do filtro na segunda consulta)? É faturamento posterior ao recebimento?
-20. **Prazo de guarda e contingência:** confirmar com o contador prazos de guarda dos XMLs e a política desejada de contingência para a NFCom.
-21. **Validação dos padrões:** conferir layout 2, IBS/CBS, manual do Web Service v3.4 (ou mais novo), NFCom/SVRS e regras de transição nos portais oficiais antes de implementar (o CONTEXTO_PROJETO.md já exige essa revalidação).
+6. **ICMS e Simples Nacional:** o PDF impresso do SCM mostra "Valor do ICMS = 25% do total" e o guardado mostra 0,00; o código tem o texto "empresa optante pelo Simples Nacional" (não impresso). Qual é o regime de cada empresa (CEW, GR Serviços e Telecomunicações, GR Cibersegurança, empresas 1 e 4)? Há ICMS destacado ou não?
+7. **NFS-e, ISS:** o ISS só é calculado quando `info_fiscal_empresa.reter_iss = 'S'`; o arquivo de lote sempre leva alíquota `0000` e retenção `2` (não retido). Qual é a regra real (ISS devido pelo prestador em São Paulo, alíquota, código de serviço)? O código de serviço `07498` visto nas amostras e `empresa.cod_servico` são os corretos? Há mais de um serviço por empresa?
+8. **NFS-e, retenções:** as amostras mostram PIS 0,65%, COFINS 3% e CSLL 1% (PCC 4,65%). Confirmar a regra de quando o cliente retém (`pessoa.reter_*`) e por que INSS e IR vão sempre zerados no TXT. Confirmar a regra "dedução sempre zero" (comentário de 04/05/2022).
+9. **Tributação T/F:** confirmar o critério correto (município do prestador, do tomador ou do local da prestação) para o layout 2; no legado a regra é calculada e ignorada (sempre `T`).
+10. **Empresa 4 fixa:** por que toda a NFS-e é emitida pela empresa 4 (código, contador, inscrição municipal)? Outras empresas (1, 8, 10) emitem NFS-e? Qual o certificado A1 e a inscrição de cada uma?
+11. **Itens 188 e 171:** o que representam (mensalidade? instalação?). Por que o item 188 acrescenta "[parcela / total]" à descrição e os demais cortam o texto?
+12. **Retorno da prefeitura:** o retorno é sempre o CSV com `;` e valores em formato brasileiro? Há amostra do arquivo de retorno (não recebida) para validar os índices de coluna usados na importação (`[1]`, `[3]`, `[6]`, `[8]`, `[26]`)?
+13. **Cancelamento de NFS-e:** o cancelamento no portal da prefeitura é feito manualmente? A rotina que seta pagamento cancelado (`nr_situacao_pagamento = 3`) deveria atingir o lançamento do RPS e não o número do contrato?
+14. **Arquivos ainda não fornecidos:** `ImpressaoSVA.php`, `ImpressaoNotaDebito.php`, `NotaFiscalServico.js` e a tela de filtros de geração de RPS (ver "Convenções").
+15. **Convênio 115:** os arquivos mestre/item/cadastro eram realmente gerados e entregues ao fisco? Por qual rotina? Há obrigação residual de entregar arquivos dos períodos em que o modelo 21 foi emitido?
+16. **Séries e numeração:** a série 'U' (única) é a única em uso no SCM? O novo ERP precisa continuar a partir do último número emitido de SCM, SVA, ND e RPS (migrar os contadores)?
+17. **Datas:** a data de emissão do SCM/SVA/ND é digitada e pode ser retroativa; reativar SCM/SVA reinicia a data de emissão para hoje; o RPS grava a data de geração do lote e não a data do RPS. Qual comportamento deve existir no novo?
+18. **Cancelar e liberar parcela:** ao cancelar SCM/SVA/ND a parcela deve voltar à fila? Hoje não volta (na NFS-e volta apenas com a opção "reutilizar").
+19. **Descrições fixas por cliente** (ids 1581, 2126, 1862, 2551, 2378, 2548, 2351, 2673, 2311, 2757, 2758): ainda estão ativos? Os valores no texto estão atualizados? Migrar como modelo de descrição por cliente/contrato.
+20. **Empresas emissoras:** quais empresas (1, 4, 8, 10 e outras do cadastro; `AUTO_INCREMENT=11` em `empresa`) estarão ativas no novo ERP e com que regime? As empresas 1 e 4 formam um grupo (`IN (1,4,0)`): regra de negócio?
+21. **Clientes pessoa física e IE:** `INSCRG` trata "ISENTO"; como tratar tomadores PF, estrangeiros e sem CPF/CNPJ no NFS-e e na NFCom? (O layout do TXT com CPF não aparece nas amostras.)
+22. **Dois flags de unificação** (`unif_notas` x `unif_svascm`): são o mesmo conceito? O ND deve usar `unif_notas`?
+23. **Faturar parcela "Paga":** por que a tela permite gerar SCM/SVA de parcelas já pagas? É faturamento posterior ao recebimento?
+24. **Prazo de guarda e contingência:** confirmar prazos de guarda dos XMLs e a política desejada de contingência para a NFCom.
+25. **Validação dos padrões:** conferir layout 2, IBS/CBS, manual do Web Service v3.4 (ou mais novo), NFCom/SVRS e regras de transição nos portais oficiais antes de implementar (o CONTEXTO_PROJETO.md já exige essa revalidação).
 
----
+**Respondidas nesta revisão:** origem e criação dos RPS (FIS-008, ação `gera-nfse`); funcionamento do retorno (CSV `;`, FIS-006); histórico de `log_envio` (FIS-052); funções `mascara`, `charComplete`, `convertDate*`, `redireciona` (FIS-053 e FIS-020); a lista de NFS-e sempre tem filtro (FIS-001); formato real do lote (seção 3.1).
 
 ## 6. Riscos e bugs observados que NÃO devem ser replicados
 
+Estado de cada bug da primeira versão: **confirmado**, **corrigido** (hipótese anterior refutada) ou **novo**.
+
 ### 6.1 Segurança
-- **Injeção de SQL generalizada:** valores de `$_REQUEST`/`$_POST`/`$_GET` concatenados em SQL em todos os `Control*.php`, `formSCM.php` (`?id=`), `ImpressaoSCM.php` (`?id=`), `SCM.php/SVA.php/NotaDebito.php` (`?err=`), `ControlSCM` (`cliente`, `ctrtScm`, `empresa`, `chckSCM[]`, `nr_valor`, `id`), `ControlSVA` (`descricao`, `nr_valor` sem escape), `ControlNotaDebito` (`descricao`, `obs`).
-- **`Talonario.php` executa `SELECT $campos FROM $tabela`** com nome de tabela e de colunas vindos do POST: permite ler qualquer tabela do banco (incluindo credenciais) por qualquer usuário autenticado (e sem checagem de permissão vista).
-- **`WHERE` guardado em sessão** (`where_nfse`, `where_scm`, `where_sva`, `asEDs`) e reaproveitado em outras páginas; `decryptIt` foi comentado (`ExportarNFSE.php`, l. 18).
-- Falta de autorização por perfil nas ações; `display_errors` ligado em `ControlSVA.php`; saída de HTML sem escape (XSS) com nomes de cliente e parâmetros GET.
-- Ações destrutivas por GET/POST sem token CSRF.
-- Scripts jQuery de `code.jquery.com` via HTTP (sem TLS) em várias telas.
+- **Injeção de SQL generalizada (confirmado e ampliado):** valores de `$_REQUEST`/`$_POST`/`$_GET` concatenados em SQL em todos os `Control*.php`, `formSCM/SVA/NotaDebito.php` (`?id=`), `ImpressaoSCM.php` (`?id=`), `NotaFiscalServico.php` (filtros), `ControlNotaFiscalServico.php` (`id`, `nm_cliente`, `nrCPFCNPJ`, `desc_servico`, `msg` de cancelamento, valores monetários) e `LogEnvio.php`. `anti_injection()` existe e não é usada.
+- **`Talonario.php` executa `SELECT $campos FROM $tabela`** com valores vindos do POST, que a própria tela monta em JavaScript: qualquer usuário autenticado pode ler qualquer tabela/colunas (inclusive credenciais) alterando a requisição.
+- **`WHERE` guardado em sessão** (`where_nfse`, `where_scm`, `where_sva`, `where_nota_debito`, `asEDs`) e reaproveitado em outras páginas; `decryptIt` é apenas `base64` (não é proteção).
+- **Novo:** `save` e `cancel` de NFS-e devolvem o SQL na resposta JSON (`'sql' => $sql`); `a()` imprime a mensagem dentro de `alert("...")` sem escapar; upload de retorno grava `$path/csv/<nome original>` sem validar nome/extensão; `chmod 0777` nos lotes; sem autorização por perfil, sem token CSRF nas ações de cancelar e salvar.
+- `display_errors` ligado em `ControlSVA.php`; HTML sem escape (XSS) com nomes de cliente e parâmetros GET; scripts jQuery de `code.jquery.com` via HTTP.
+- Extensão `mysql_*` (removida no PHP 7); sem consultas parametrizadas.
 
 ### 6.2 Cálculo e regra fiscal
-- RPS: **alíquota lida de coluna inexistente (`ali_iss`)**, **tributação `T` fixa** (a regra T/F é calculada e descartada), **data de emissão = hoje**, cabeçalho com mesmo dia nos dois períodos.
-- CPF ocupa 11 posições no registro 6 (deslocamento); campos sem truncamento (bairro, cidade, UF); logradouro deformado (início do corte errado e remoção de espaços); número e complemento sem campo próprio; mensagens de erro gravadas dentro do arquivo (`header invalido`, `footer invalido`, texto de erro no lugar da linha).
-- `emitiu_nf='S'` marcado na geração do arquivo, não na confirmação; filtro `situacao='A'` não aplicado quando o `WHERE` da sessão está vazio.
-- Fator fixo 0,2/0,8 do item 175 sem fonte legal explícita; aplicado diferente na grade (`unifica`) e na geração.
-- Valor de ICMS = 25% do total no PDF impresso, 0,00 no PDF guardado, e `bc_icms`/`nr_icms` nunca gravados: **o documento tem valores fiscais incoerentes entre telas**.
-- Código de autenticação MD5 próprio, sem relação com chave de acesso/protocolo; não é recalculado ao editar valor.
-- Edição e reativação de documento emitido (muda valor, vencimento e, na reativação, a data de emissão); cancelamento sem motivo, sem evento e sem liberar a parcela.
-- Documentos `ND` e `SVA` compartilham `gerado_svascm/nr_svascm`; item 467 nas duas listas (disputa entre documentos).
-- ND: `$payments` e `$nd['valor']` indefinidos; `nr1_ctrt` inexistente; `implode` de arrays na consulta; `$nd[$yz]['nr_ctrt']`; PDF com valor sem formatar.
+- **RPS (confirmado por amostras):** alíquota lida de coluna inexistente (`ali_iss`; amostras `0000`); tributação `T` fixa (a regra T/F é calculada e descartada); data de emissão = dia da geração; cabeçalho com a mesma data nos dois campos; **total de deduções sempre zero** por chave errada (`Deducao` x `deducao`, novo).
+- **RPS, layout (confirmado):** CPF ocupa 11 posições (deslocamento, por leitura do código); bairro/cidade/UF sem truncamento; logradouro sem espaços e pontuação (confirmado nas amostras) e com início do corte errado; número e complemento sem campo; e-mail cortado no meio de um endereço (confirmado); `tirarAcentos` ineficaz (confirmado: `Ç`/`Ã` permanecem); mensagens de erro gravadas dentro do arquivo (`header invalido`, `footer invalido`, texto de erro no lugar da linha).
+- **Corrigido:** a lista de exportação **não** fica sem filtro (o `WHERE` da sessão sempre existe), mas a precedência do `OR` no filtro por número quebra o filtro de empresa/situação no ramo `nr_nfse` (novo).
+- **Novo, NFS-e:** empresa 4 e série/versão fixas; `emitiu_nf='S'` marcado na geração do arquivo e exigido pela importação; importação casa por RPS + valor e conta como sucesso linhas sem correspondência, com `$row - 3` supondo número de linhas extras; redireciona para `CnsNotaFiscalServico.php` (inexistente); ISS só é calculado se `reter_iss='S'`; `valor_total` ignora ISS retido; `dt_emissao` (date) recebe data e hora; `nr_cliente` e `nr_pessoa` iguais; `nrValor` x `$nr_valor` em `gerarnotafiscal`; filtro de cliente sem resultado é ignorado e lista tudo; transação por parcela com alertas e redirects dentro do laço.
+- **Novo, cancelamento NFS-e:** `cancelaNFSE` chama `cancelaPayment($nr_contrato)` (marca como cancelado o `payment` cujo **número é o do contrato**, `LIMIT 1`) e o Control força `$canc = true`; edição de RPS aplica `toMoneySQL` à descrição, não recalcula tributos e pode alterar RPS emitida ou cancelada; a tela de edição busca cliente em `pessoa` com id de `payment_fornecedor`.
+- Fator fixo 0,2/0,8 do item 175 sem fonte explícita; aplicado diferente na grade (`unifica`) e na geração.
+- SCM: valor de ICMS = 25% do total no PDF impresso, 0,00 no PDF guardado, e `bc_icms`/`nr_icms` nunca gravados: documento com valores fiscais incoerentes entre telas.
+- Código de autenticação MD5 próprio, sem relação com chave de acesso/protocolo; não é recalculado ao editar valor. Edição e reativação de documento emitido (muda valor, vencimento e, na reativação, a data de emissão); cancelamento sem motivo, sem evento e sem liberar a parcela.
+- NFS-e, SVA e ND compartilham `gerado_svascm`/`nr_svascm`; item 467 nas listas de SVA e ND (disputa).
+- ND: `$payments` e `$nd['valor']` indefinidos; `nr1_ctrt` inexistente; `implode` de arrays na consulta; `emplode()` em `CnsNotaDebito.php`; PDF com valor sem formatar.
 - SVA: blocos de 2311/2757/2758 usam `$arr_scm` (mortos); PDF escolhe a emissora por `$sva['nr_empresa']` inexistente (sempre CEW).
-- `Talonario.php`: ND filtra por sessão diferente da gravada; `strpos(...) ?` com posição 0.
+- **Corrigido:** o talonário de ND **respeita** o filtro (a `CnsNotaDebito.php` copia `asEDs` para `where_nota_debito`). Permanece o `strpos(...) ?` com posição 0 e o SQL montado pelo navegador.
+- **Novo, convênio 115:** `charComplete()` provavelmente devolve `NULL` (constante `STR_PAD_` inexistente), tornando vazios todos os campos dos arquivos mestre e item; além do hash de registro constante e da gravação de array.
 
 ### 6.3 Integridade e concorrência
-- Numeração via campo oculto da página (sem bloqueio; sem índice único) pode duplicar números. As tabelas fiscais são InnoDB, mas os PDFs gravados em disco não participam do `ROLLBACK`.
-- `nErro` acumulado impede a marcação dos demais grupos e o `ROLLBACK` final não informa o usuário (SCM): falha silenciosa.
-- `LAST_INSERT_ID()` obtido por `SELECT` separado do INSERT; só é correto se `executar()` usar a mesma conexão [inf; `conexao.php` não fornecido].
-- Cliente sem match na consulta gera `IN ()` (erro de SQL) em SCM/SVA.
-- Dois caminhos diferentes para obter o mesmo contador (`nr_fiscal` x `nr_empresa` + `DESC LIMIT 1`).
+- Numeração via campo oculto da página (sem bloqueio; sem índice único) pode duplicar números (SCM, SVA, ND e RPS). As tabelas fiscais são InnoDB, mas os PDFs e arquivos em disco não participam do `ROLLBACK`.
+- SCM/SVA/ND: `nErro` acumulado impede a marcação dos grupos seguintes e o `ROLLBACK` final não informa o usuário (SCM): falha silenciosa. NFS-e: `COMMIT` por parcela.
+- `LAST_INSERT_ID()` obtido por `SELECT` separado do INSERT; só é correto se `executar()` usar a mesma conexão (usa `mysql_query` na conexão padrão, o que sustenta o uso) [inf].
+- Cliente sem match na consulta gera `IN ()` (erro de SQL) em SCM/SVA/NFS-e.
+- Dois ou três caminhos diferentes para obter o mesmo contador (`nr_fiscal`, `nr_empresa` + `DESC LIMIT 1`, `checaInfoFiscal`).
 
 ### 6.4 Manutenção
-- Dados da emissora, endereços, telefones, e-mail e CNPJs escritos nos PDFs; ids de clientes e valores em reais escritos no código; ids de plano de contas fixos (323/324/175/467/174/430).
-- Duplicação de código (SCM/SVA/ND; telas e PDFs quase idênticos), funções com o mesmo nome (`naoUnifica`, `unifica`, `preparaDescricao`) em arquivos diferentes (conflito se incluídos juntos), código morto (`0 != 0`, `extraiLogradouro`, `faturar-scm`, `compactFile`, `$res_contratos`).
+- Dados da emissora, endereços, telefones, e-mail e CNPJs escritos nos PDFs; ids de clientes e valores em reais escritos no código; ids de plano de contas fixos (323/324/175/467/174/430/188/171); empresa 4 fixa na NFS-e.
+- Duplicação de código (SCM/SVA/ND; telas e PDFs quase idênticos), funções com o mesmo nome (`naoUnifica`, `unifica`, `preparaDescricao`) em arquivos diferentes (conflito se incluídos juntos; `preparaDescricao` existe em três versões), código morto (`0 != 0`, `extraiLogradouro`, `download`, `faturar-scm`, `compactFile`, `$res_contratos`).
 - Validação de datas em JS ineficaz e dependente do idioma do navegador.
-- Mistura de `utf8_decode` e UTF-8 puro, meta `iso-8859-1` e banco latin1: risco de corrupção de acentos na migração de textos (`descricao`, `observacao`).
+- Mistura de `utf8_decode` e UTF-8 puro, meta `iso-8859-1` e banco latin1: risco de corrupção de acentos na migração de textos (`descricao`, `observacao`, `desc_servico`).
 - Arquivos do Convênio 115 incompletos (hash de registro sempre igual; gravação de array; caminhos indefinidos).
