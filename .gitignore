@@ -1,0 +1,21 @@
+# Laravel
+/vendor/
+/node_modules/
+/public/build/
+/public/hot
+/storage/*.key
+.env
+.env.*
+!.env.example
+# Segredos fiscais e dados do legado nunca entram no repositório
+*.pfx
+*.p12
+*.pem
+*.sql
+*.sql.gz
+/legado/
+# SO/IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
