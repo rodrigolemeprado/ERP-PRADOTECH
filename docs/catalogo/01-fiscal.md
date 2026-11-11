@@ -148,7 +148,7 @@ Legenda do tipo: **NFS-e** = NFS-e São Paulo; **Mod.21** = nota fiscal de servi
   - Linha do arquivo sem RPS correspondente: apenas `a("Não foi possivel recuperar informações da RPS")` e segue; **não conta como erro** e o final ainda diz "Importado com sucesso". Só falha de UPDATE faz `ROLLBACK`.
   - Redireciona para `CnsNotaFiscalServico.php` (arquivo inexistente nos fontes recebidos). A consulta de empresa dentro do laço usa `$rps[0][0]['nr_empresa']` (indexação errada) e o resultado não é usado.
 - **Tabelas/colunas:** lê/grava `nota_fiscal_servico` (`situacao, nr_nfse, nr_verificacao_nfse`; busca por `emitiu_nf, nr_rps, valor_servico`).
-- **Equivalente no ERP novo:** eliminado como passo manual; o retorno vem na resposta/consulta do Web Service (número, código de verificação, XML da NFS-e), gravado automaticamente e casado pelo identificador do documento, não por RPS + valor. Manter, se necessário, importação de arquivos/XMLs antigos para histórico.
+- **Equivalente no ERP novo:** eliminado como passo manual; o retorno vem na resposta/consulta do Web Service (número, código de verificação, XML da NFS-e), gravado automaticamente e casado pelo identificador do documento, não por RPS + valor. Sem importador de arquivo (ADR-002).
 
 #### FIS-007 Consulta de NFS-e e RPS emitidas
 - **Tipo:** NFS-e
@@ -311,7 +311,7 @@ Legenda do tipo: **NFS-e** = NFS-e São Paulo; **Mod.21** = nota fiscal de servi
 - **Origem:** `ControlSCM.php`: `documentoMestreFiscal()` (l. 647-694), `documentoItemFiscal()` (l. 593-639), `gravaArquivo()` (l. 725-740), `autDigital()` (l. 749-757), `compactFile()` (l. 702-715). **Nenhuma tela ou `action` fornecida chama essas funções** [obs]; o chamador (provavelmente `CnsSCM.php`) não foi fornecido [nf].
 - **Regra [obs]:** monta registro de largura fixa com os campos da seção 3.2, nome do arquivo `UF + CNPJ emitente + modelo + série + AAMM da emissão + situação + "M.001"`. Problemas visíveis: (1) `documentoItemFiscal` é cópia quase idêntica de `documentoMestreFiscal` (mesmos campos, nome de arquivo termina em `M.001` também, sem campos próprios de item); (2) `autDigital()` itera `$registros` (inexistente; o parâmetro é `$registro`) e devolve sempre o MD5 de string vazia (`d41d8cd98f00b204e9800998ecf8427e`) [inf]; (3) `gravaArquivo()` usa `$path_scm` indefinido, ignora a string `$info` montada e grava o **array** `$data` com `file_put_contents` e faz `echo` do resultado; (4) `compactFile()` usa `$path_compact` indefinido; (5) **não há função para o arquivo de cadastro de destinatários**; (6) a ordem final dos campos depende da ordem das chaves do array montado pelo chamador, que não foi fornecido. (7) `charComplete()` (`funcoes.php`, l. 1781) usa `STR_PAD_.$type` (constante inexistente concatenada à letra N ou X); em PHP 5.6 o `str_pad` recebe texto no 4º argumento (esperado inteiro), emite aviso e devolve `NULL` [inf]: **todos os campos formatados por `charComplete` ficariam vazios**. O `$side` calculado nunca é usado. A intenção aparente é 'N' = numérico com zeros e 'X' = alfanumérico com espaços. Conclusão: **o código dos arquivos do Convênio 115 está incompleto/não funcional nos fontes fornecidos**.
 - **Tabelas:** nenhuma lida diretamente (recebe array).
-- **Equivalente no ERP novo:** não se aplica ao modelo 62 (NFCom é XML via SEFAZ). Confirmar com o contador se há obrigação residual para documentos modelo 21 do passado (ver seção 5).
+- **Equivalente no ERP novo:** não existe no ERP novo (ADR-002). A NFCom é um XML autorizado pela SEFAZ, sem arquivos do Convênio 115. Obrigações de períodos antigos ficam fora do sistema (seção 5.4).
 
 #### FIS-021 Talonário / relatório de notas (SCM, SVA e ND)
 - **Tipo:** Mod.21 / SVA / ND
@@ -640,37 +640,41 @@ Diferenças de tipo e inconsistências relevantes para a migração:
 - Não há índice único em `nr_scm`, `nr_sva`, `nr_nd` ou `nr_rps`.
 - Colunas lidas por nome errado: `ali_iss` (real: `aliq_iss`) e `ctrt.nr1_ctrt` (não existe).
 
-## 5. Dúvidas e pontos a confirmar com o cliente e o contador
+## 5. Pontos a definir com o cliente e o contador
 
-Itens da primeira versão que foram **respondidos pelo código/amostras** estão no fim desta seção.
+**Premissa (ADR-002):** o ERP-PRADOTECH emite somente nos padrões fiscais vigentes e não terá nenhum caminho de emissão nos modelos antigos. Isso vale para a NFS-e de São Paulo pelo Web Service no layout mais novo (ISS + IBS/CBS), para a NFS-e Padrão Nacional onde ela se aplicar e para a NFCom modelo 62. Ficam fora do sistema o RPS em TXT para upload manual, o importador de retorno em CSV, a NF modelo 21, os arquivos do Convênio ICMS 115/03 e o cancelamento só local. O comportamento do legado serve apenas como referência das regras de negócio. Nas seções 1 a 4 ele está descrito para garantir a paridade funcional, não para ser reproduzido. Quando sair uma versão nova de layout, o ERP passa a usá-la e a anterior é desativada assim que o fisco permitir.
 
-1. **Documento atual do SCM:** hoje sai NFCom (modelo 62) ou ainda modelo 21? Por onde é emitido (portal SEFAZ, outro sistema)? Se o modelo 21 não é mais usado, descartar FIS-018/019/020 do escopo de paridade e manter só leitura do histórico (pendência já registrada no CONTEXTO_PROJETO.md).
-2. **Natureza fiscal do SVA:** a fatura traz o texto "Atividade sem incidência de ISSQN, LC 116/2003". Esse tratamento está correto e aceito pelo contador? O SVA deve virar NFS-e (SP layout 2), permanecer documento gerencial ou ser eliminado? Qual o enquadramento atual (item da lista de serviços)?
-3. **Natureza fiscal da Nota de Débito:** é cobrança de reembolso/despesa (documento gerencial) ou fato gerador de ISS/ICMS? Quais são os itens 174, 467 e 430?
-4. **Significado dos itens de plano de contas:** 323 (SCM), 324 (SVA), 175 (rateio 20% SCM / 80% SVA), 467 (SVA e ND), 174, 430 e, para NFS-e, **188 e 171**. O rateio 20/80 é fixo ou contratual? Qual a base fiscal? Como evitar que um mesmo item (467) seja disputado por SVA e ND, e que NFS-e, SVA e ND compartilhem `gerado_svascm`?
-5. **CFOP:** quais CFOPs estão em uso em `payment_fornecedor.cfop` (campo livre) e no conteúdo de `cfop_data`? O CFOP do cliente pode mudar por operação (interestadual etc.)?
-6. **ICMS e Simples Nacional:** o PDF impresso do SCM mostra "Valor do ICMS = 25% do total" e o guardado mostra 0,00; o código tem o texto "empresa optante pelo Simples Nacional" (não impresso). Qual é o regime de cada empresa (CEW, GR Serviços e Telecomunicações, GR Cibersegurança, empresas 1 e 4)? Há ICMS destacado ou não?
-7. **NFS-e, ISS:** o ISS só é calculado quando `info_fiscal_empresa.reter_iss = 'S'`; o arquivo de lote sempre leva alíquota `0000` e retenção `2` (não retido). Qual é a regra real (ISS devido pelo prestador em São Paulo, alíquota, código de serviço)? O código de serviço `07498` visto nas amostras e `empresa.cod_servico` são os corretos? Há mais de um serviço por empresa?
-8. **NFS-e, retenções:** as amostras mostram PIS 0,65%, COFINS 3% e CSLL 1% (PCC 4,65%). Confirmar a regra de quando o cliente retém (`pessoa.reter_*`) e por que INSS e IR vão sempre zerados no TXT. Confirmar a regra "dedução sempre zero" (comentário de 04/05/2022).
-9. **Tributação T/F:** confirmar o critério correto (município do prestador, do tomador ou do local da prestação) para o layout 2; no legado a regra é calculada e ignorada (sempre `T`).
-10. **Empresa 4 fixa:** por que toda a NFS-e é emitida pela empresa 4 (código, contador, inscrição municipal)? Outras empresas (1, 8, 10) emitem NFS-e? Qual o certificado A1 e a inscrição de cada uma?
-11. **Itens 188 e 171:** o que representam (mensalidade? instalação?). Por que o item 188 acrescenta "[parcela / total]" à descrição e os demais cortam o texto?
-12. **Retorno da prefeitura:** o retorno é sempre o CSV com `;` e valores em formato brasileiro? Há amostra do arquivo de retorno (não recebida) para validar os índices de coluna usados na importação (`[1]`, `[3]`, `[6]`, `[8]`, `[26]`)?
-13. **Cancelamento de NFS-e:** o cancelamento no portal da prefeitura é feito manualmente? A rotina que seta pagamento cancelado (`nr_situacao_pagamento = 3`) deveria atingir o lançamento do RPS e não o número do contrato?
-14. **Arquivos ainda não fornecidos:** `ImpressaoSVA.php`, `ImpressaoNotaDebito.php`, `NotaFiscalServico.js` e a tela de filtros de geração de RPS (ver "Convenções").
-15. **Convênio 115:** os arquivos mestre/item/cadastro eram realmente gerados e entregues ao fisco? Por qual rotina? Há obrigação residual de entregar arquivos dos períodos em que o modelo 21 foi emitido?
-16. **Séries e numeração:** a série 'U' (única) é a única em uso no SCM? O novo ERP precisa continuar a partir do último número emitido de SCM, SVA, ND e RPS (migrar os contadores)?
-17. **Datas:** a data de emissão do SCM/SVA/ND é digitada e pode ser retroativa; reativar SCM/SVA reinicia a data de emissão para hoje; o RPS grava a data de geração do lote e não a data do RPS. Qual comportamento deve existir no novo?
-18. **Cancelar e liberar parcela:** ao cancelar SCM/SVA/ND a parcela deve voltar à fila? Hoje não volta (na NFS-e volta apenas com a opção "reutilizar").
-19. **Descrições fixas por cliente** (ids 1581, 2126, 1862, 2551, 2378, 2548, 2351, 2673, 2311, 2757, 2758): ainda estão ativos? Os valores no texto estão atualizados? Migrar como modelo de descrição por cliente/contrato.
-20. **Empresas emissoras:** quais empresas (1, 4, 8, 10 e outras do cadastro; `AUTO_INCREMENT=11` em `empresa`) estarão ativas no novo ERP e com que regime? As empresas 1 e 4 formam um grupo (`IN (1,4,0)`): regra de negócio?
-21. **Clientes pessoa física e IE:** `INSCRG` trata "ISENTO"; como tratar tomadores PF, estrangeiros e sem CPF/CNPJ no NFS-e e na NFCom? (O layout do TXT com CPF não aparece nas amostras.)
-22. **Dois flags de unificação** (`unif_notas` x `unif_svascm`): são o mesmo conceito? O ND deve usar `unif_notas`?
-23. **Faturar parcela "Paga":** por que a tela permite gerar SCM/SVA de parcelas já pagas? É faturamento posterior ao recebimento?
-24. **Prazo de guarda e contingência:** confirmar prazos de guarda dos XMLs e a política desejada de contingência para a NFCom.
-25. **Validação dos padrões:** conferir layout 2, IBS/CBS, manual do Web Service v3.4 (ou mais novo), NFCom/SVRS e regras de transição nos portais oficiais antes de implementar (o CONTEXTO_PROJETO.md já exige essa revalidação).
+Por isso as perguntas abaixo tratam só do que o ERP novo precisa saber para emitir certo no padrão atual.
 
-**Respondidas nesta revisão:** origem e criação dos RPS (FIS-008, ação `gera-nfse`); funcionamento do retorno (CSV `;`, FIS-006); histórico de `log_envio` (FIS-052); funções `mascara`, `charComplete`, `convertDate*`, `redireciona` (FIS-053 e FIS-020); a lista de NFS-e sempre tem filtro (FIS-001); formato real do lote (seção 3.1).
+### 5.1 Empresas emissoras
+1. **Quais empresas emitem e em qual regime:** CEW, GR Serviços e Telecomunicações (8), GR Cibersegurança (10) e as empresas 1 e 4. Para cada uma: regime tributário (Simples Nacional ou outro), inscrições municipal e estadual, certificado A1 e quais documentos emite (NFS-e, NFCom ou os dois).
+2. **Grupo 1 e 4:** o legado trata as empresas 1 e 4 como um grupo (`IN (1,4,0)`) e emite toda a NFS-e pela empresa 4. Isso é uma regra de negócio ou um vício do código?
+
+### 5.2 Enquadramento dos serviços
+3. **SCM:** CFOPs e classificação tributária (cClassTrib) dos itens na NFCom, e se há destaque de ICMS por empresa. No legado o PDF impresso mostra 25% de ICMS e o guardado mostra 0,00.
+4. **SVA:** entra como item da NFCom junto com o SCM, vira NFS-e ou continua como documento não fiscal? O legado imprime "sem incidência de ISSQN, LC 116/2003".
+5. **Nota de Débito:** é reembolso ou cobrança de despesa (documento não fiscal) ou é fato gerador? Quais são os itens 174, 467 e 430?
+6. **NFS-e:** código de serviço por empresa (as amostras usam `07498`), alíquota de ISS, local de incidência no layout novo e o tratamento de IBS/CBS (cClassTrib e alíquotas da transição).
+7. **Retenções:** em que situações o tomador retém PIS, COFINS, CSLL (as amostras mostram 4,65%), IR, INSS e ISS. Deduções existem?
+
+### 5.3 Regras de faturamento
+8. **Plano de contas para documento fiscal:** o que significam os itens 323, 324, 175, 467, 174, 430, 188 e 171, e se o rateio 20% SCM / 80% SVA do item 175 é fixo ou depende do contrato. No ERP novo esse mapeamento vira configuração, e não código fixo.
+9. **Faturar parcela já paga:** o legado permite. Esse faturamento depois do recebimento é uma prática real?
+10. **Descrições fixas por cliente** (cerca de 11 clientes no código): ainda valem? Elas viram modelos de descrição configuráveis por contrato.
+11. **Tomadores sem CPF/CNPJ, estrangeiros e pessoa física:** com que frequência aparecem?
+
+### 5.4 Transição do legado
+12. **Numeração:** a NFCom começa em série e número próprios. Para a NFS-e, precisamos do último número de RPS usado por empresa, para não repetir.
+13. **Histórico:** os documentos já emitidos pelo legado (modelo 21, SVA, ND e NFS-e) entram só como consulta, somente leitura, ou ficam no arquivo do legado? O ERP novo não os reemite.
+14. **Obrigações dos períodos antigos**, como a entrega de arquivos do Convênio 115 de meses passados: ficam com o legado ou com o contador, fora do ERP novo.
+
+### 5.5 Decisões já tomadas (não precisam de resposta)
+- Data de emissão sempre a da autorização, numeração controlada pelo sistema com unicidade garantida no banco, e cancelamento sempre por evento oficial (prefeitura ou SEFAZ).
+- O cancelamento devolve a parcela à fila de faturamento, com registro na auditoria. Um único conceito de "unificar parcelas" vale para todos os documentos.
+- Contingência da NFCom nos termos do manual vigente e guarda dos XMLs pelo prazo legal (mínimo de 5 anos, a confirmar com o contador).
+- Antes de implementar, confirmar os layouts, o manual do Web Service de SP, a NFS-e Nacional e a NFCom/SVRS nos portais oficiais.
+
+**Respondidas pelo código e pelas amostras:** origem e criação dos RPS (FIS-008), retorno da prefeitura (FIS-006), `log_envio` (FIS-052), funções utilitárias (FIS-053 e FIS-020), filtro da lista de NFS-e (FIS-001) e formato real do lote (seção 3.1).
 
 ## 6. Riscos e bugs observados que NÃO devem ser replicados
 
